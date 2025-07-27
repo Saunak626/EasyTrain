@@ -1,0 +1,65 @@
+
+# 基础配置模板
+# 用于指导自定义修改，包含所有可配置选项和详细说明
+
+# 超参数配置
+hyperparameters:
+  learning_rate: 0.001    # 学习率
+  batch_size: 128         # 批大小
+  epochs: 10              # 训练轮数
+  dropout: 0.1            # Dropout比例
+
+# 训练配置
+training:
+  experiment_name: "custom_exp"           # 实验名称
+  save_model: true                        # 是否保存模型
+  model_save_path: "models/model.pth"     # 模型保存路径
+
+# SwanLab配置
+swanlab:
+  project_name: "training_framework"      # 项目名称
+  description: "深度学习训练实验"          # 实验描述
+
+# 数据配置
+data:
+  type: "cifar10"                         # 数据集类型: cifar10, custom
+
+  # CIFAR-10配置（当type为cifar10时使用）
+  root: "./data"                          # CIFAR-10数据根目录
+  download: true                          # 是否自动下载CIFAR-10
+  augment: true                           # 是否使用数据增强
+  num_workers: 4                          # 数据加载进程数
+
+  # 自定义数据集配置（当type为custom时使用）
+  data_dir: "./data/raw/custom_dataset"   # 自定义数据集目录
+  csv_file: null                          # CSV文件路径（可选）
+  image_size: 224                         # 图像大小
+  train_split: 0.8                        # 训练集比例
+
+# GPU配置
+gpu:
+  device_ids: "2,3"                       # GPU设备ID
+  auto_select: true                       # 是否自动选择可用GPU
+
+# 模型配置
+model:
+  type: "resnet18"                        # 模型类型: resnet18, resnet50, efficientnet_b0
+  params: {}                              # 模型参数
+
+# 损失函数配置
+loss:
+  type: "cross_entropy"                   # 损失函数类型: cross_entropy, focal_loss, label_smoothing, mse
+  params: {}                              # 损失函数参数
+
+# 优化器配置
+optimizer:
+  type: "adam"                            # 优化器类型: adam, adamw, sgd
+  params:
+    weight_decay: 0                       # 权重衰减
+
+# 学习率调度器配置
+scheduler:
+  type: "onecycle"                        # 调度器类型: onecycle, step, cosine, plateau
+  params:
+    step_size: 10                         # StepLR步长
+    gamma: 0.1                            # StepLR衰减率

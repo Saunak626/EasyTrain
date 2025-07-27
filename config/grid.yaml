@@ -1,0 +1,68 @@
+
+grid:
+  learning_rate: [0.001]
+  batch_size: [64]
+  dropout: [0.1]
+  epochs: [5]
+  model_type: ["resnet18", "resnet50", "efficientnet_b0"]  # 简化的预训练模型列表
+
+# 基础配置（网格搜索时的默认值）
+hyperparameters:
+  learning_rate: 0.001  # 默认值，会被网格搜索覆盖
+  batch_size: 64
+  epochs: 5
+  dropout: 0.1
+
+training:
+  experiment_name_prefix: "grid_exp"
+  experiment_name: "grid_default"  # 默认实验名称
+  save_model: false
+
+swanlab:
+  project_name: "training_framework_grid_search"
+  description: "网格搜索实验"
+
+# 网格搜索特定配置
+grid_search:
+  max_experiments: 50
+  continue_on_error: true
+  parallel_jobs: 1
+
+# 数据配置
+data:
+  type: "cifar10"
+  root: "./data"
+  download: true
+  augment: true
+  num_workers: 4
+
+# 模型配置
+model:
+  type: "resnet18"
+  params: {}
+
+# 多卡训练配置
+multi_gpu:
+  enabled: true
+  strategy: "ddp"  # 分布式数据并行
+
+# GPU配置
+gpu:
+  device_ids: "2,3"  # 默认使用GPU 0，多卡可设置为 "0,1,2"
+  auto_select: true  # 是否自动选择可用GPU
+
+# 损失函数配置
+loss:
+  type: "cross_entropy"
+  params: {}
+
+# 优化器配置
+optimizer:
+  type: "adam"
+  momentum: 0.9
+
+# 学习率调度器配置
+scheduler:
+  type: "onecycle"
+  step_size: 10
+  gamma: 0.1

@@ -27,7 +27,7 @@ from src.models.image_net import get_model                      # 模型工厂�
 from src.losses.image_loss import get_loss_function            # 损失函数工厂函数
 from src.optimizers.optim import get_optimizer                 # 优化器工厂函数
 from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
-from src.data_preprocessing.dataloader_factory import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
+from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed                      # 随机种子设置工具
 
 

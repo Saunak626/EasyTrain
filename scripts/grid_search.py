@@ -132,11 +132,12 @@ def parse_result_from_files(exp_name):
 
 
 def save_results_to_csv(results, filename):
-    """保存实验结果到CSV文件"""
+    """保存实验结果到CSV文件（统一保存到runs目录）"""
     if not results:
         return None
 
-    results_dir = "grid_search_results"
+    # 统一使用runs目录，避免重复
+    results_dir = "runs"
     os.makedirs(results_dir, exist_ok=True)
     filepath = os.path.join(results_dir, filename)
 

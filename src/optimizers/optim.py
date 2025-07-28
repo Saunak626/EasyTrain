@@ -10,15 +10,12 @@ import torch.optim as optim
 def get_optimizer(model, optimizer_name, learning_rate, **kwargs):
     """
     获取优化器
-
+    
     Args:
         model: 模型
         optimizer_name: 优化器名称
         learning_rate: 学习率
         **kwargs: 其他优化器参数
-
-    Returns:
-        优化器实例
     """
     optimizer_name = optimizer_name.lower()
 
@@ -29,7 +26,6 @@ def get_optimizer(model, optimizer_name, learning_rate, **kwargs):
             weight_decay=kwargs.get('weight_decay', 0),
             betas=kwargs.get('betas', (0.9, 0.999))
         )
-
     elif optimizer_name == "adamw":
         return optim.AdamW(
             model.parameters(),
@@ -37,7 +33,6 @@ def get_optimizer(model, optimizer_name, learning_rate, **kwargs):
             weight_decay=kwargs.get('weight_decay', 0.01),
             betas=kwargs.get('betas', (0.9, 0.999))
         )
-
     elif optimizer_name == "sgd":
         return optim.SGD(
             model.parameters(),
@@ -46,14 +41,5 @@ def get_optimizer(model, optimizer_name, learning_rate, **kwargs):
             weight_decay=kwargs.get('weight_decay', 0),
             nesterov=kwargs.get('nesterov', False)
         )
-
     else:
         raise ValueError(f"不支持的优化器: {optimizer_name}。支持的优化器: adam, adamw, sgd")
-
-
-# 优化器注册表
-OPTIMIZER_REGISTRY = {
-    'adam': optim.Adam,
-    'adamw': optim.AdamW,
-    'sgd': optim.SGD,
-}

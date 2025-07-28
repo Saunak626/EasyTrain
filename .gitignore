@@ -1,2 +1,14 @@
+__pycache__/
+
 data/
+# 修改记录
 commit/
+
+# 实验记录
+grid_search_results/
+swanlog/
+runs/
+
+
+*.pyc
+

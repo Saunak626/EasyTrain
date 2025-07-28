@@ -51,46 +51,37 @@ class LabelSmoothingLoss(nn.Module):
         return loss
 
 
-def get_loss_function(loss_type="cross_entropy", **kwargs):
+def get_loss_function(loss_name, **kwargs):
     """
     获取损失函数
     
     Args:
-        loss_type: 损失函数类型
+        loss_name: 损失函数名称
         **kwargs: 损失函数参数
-    
-    Returns:
-        损失函数实例
     """
-    loss_type = loss_type.lower()
-    
-    if loss_type == "cross_entropy":
-        return nn.CrossEntropyLoss()
-    
-    elif loss_type == "focal_loss":
+    loss_name = loss_name.lower()
+
+    if loss_name == "crossentropy":
+        return nn.CrossEntropyLoss(
+            weight=kwargs.get('weight', None),
+            ignore_index=kwargs.get('ignore_index', -100),
+            reduction=kwargs.get('reduction', 'mean'),
+            label_smoothing=kwargs.get('label_smoothing', 0.0)
+        )
+    elif loss_name == "focal":
         return FocalLoss(
-            alpha=kwargs.get('alpha', 1),
-            gamma=kwargs.get('gamma', 2),
+            alpha=kwargs.get('alpha', 1.0),
+            gamma=kwargs.get('gamma', 2.0),
             reduction=kwargs.get('reduction', 'mean')
         )
-    
-    elif loss_type == "label_smoothing":
+    elif loss_name == "labelsmoothing":
         return LabelSmoothingLoss(
             num_classes=kwargs.get('num_classes', 10),
             smoothing=kwargs.get('smoothing', 0.1)
         )
-    
-    elif loss_type == "mse":
-        return nn.MSELoss()
-    
+    elif loss_name == "mse":
+        return nn.MSELoss(
+            reduction=kwargs.get('reduction', 'mean')
+        )
     else:
-        raise ValueError(f"不支持的损失函数类型: {loss_type}。支持的损失函数: cross_entropy, focal_loss, label_smoothing, mse")
-
-
-# 损失函数注册表
-LOSS_REGISTRY = {
-    'cross_entropy': nn.CrossEntropyLoss,
-    'focal_loss': FocalLoss,
-    'label_smoothing': LabelSmoothingLoss,
-    'mse': nn.MSELoss,
-}
+        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse")

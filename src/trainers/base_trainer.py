@@ -14,6 +14,8 @@ from accelerate import Accelerator
 from tqdm import tqdm
 import sys
 import os
+import json
+from datetime import datetime
 
 # 添加项目根目录到路径，确保可以正确导入项目内的模块
 # 这是一种常见的做法，用于解决Python模块导入路径问题
@@ -29,10 +31,34 @@ from src.data_preprocessing.dataloader_factory import create_dataloaders, get_da
 from src.utils.data_utils import set_seed                      # 随机种子设置工具
 
 
-def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
+def write_epoch_metrics(result_dir, epoch_data, accelerator):
+    """写入epoch级别的指标数据到JSONL文件"""
+    if not accelerator.is_main_process:
+        return
+
+    os.makedirs(result_dir, exist_ok=True)
+    jsonl_path = os.path.join(result_dir, "metrics.jsonl")
+
+    with open(jsonl_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(epoch_data, ensure_ascii=False) + "\n")
+
+
+def write_final_result(result_dir, result_data, accelerator):
+    """写入最终训练结果到JSON文件"""
+    if not accelerator.is_main_process:
+        return
+
+    os.makedirs(result_dir, exist_ok=True)
+    final_path = os.path.join(result_dir, "result.json")
+
+    with open(final_path, "w", encoding="utf-8") as f:
+        json.dump(result_data, f, ensure_ascii=False, indent=2)
+
+
+def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, is_grid_search=False):
     """
     执行单个训练轮次
-    
+
     该函数负责一个完整epoch的训练过程，包括前向传播、损失计算、
     反向传播、参数更新和学习率调整。支持多GPU分布式训练。
 
@@ -44,13 +70,27 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         lr_scheduler: 学习率调度器，动态调整学习率
         accelerator: Accelerator实例，处理多GPU和混合精度训练
         epoch: 当前训练轮次编号
+
+    Returns:
+        float: 平均训练损失
     """
     # 设置模型为训练模式，启用dropout和batch normalization的训练行为
     model.train()
 
+    # 初始化训练指标
+    total_loss = 0.0
+    num_batches = 0
+
     # 只在主进程显示进度条，避免多GPU时重复显示
     if accelerator.is_main_process:
-        progress_bar = tqdm(total=len(dataloader), desc=f"Epoch {epoch} Training", unit="batch")
+        progress_bar = tqdm(
+            total=len(dataloader),
+            desc=f"Epoch {epoch} Training",
+            unit="batch",
+            dynamic_ncols=True,
+            leave=False,
+            disable=is_grid_search  # 在网格搜索模式下禁用进度条
+        )
 
     # 遍历训练数据的每个批次
     for batch_idx, (inputs, targets) in enumerate(dataloader):
@@ -68,20 +108,35 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         # 更新学习率：根据调度策略调整学习率
         lr_scheduler.step()
 
+        # 累计损失统计
+        total_loss += loss.item()
+        num_batches += 1
+
         # 记录训练指标到实验追踪系统（如SwanLab）
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
         # 定期更新进度条显示，避免过于频繁的更新影响性能
-        if accelerator.is_main_process and batch_idx % 50 == 0:
-            progress_bar.update(50)
-            progress_bar.set_postfix_str(f"Loss: {loss.item():.4f}")
+        if accelerator.is_main_process and batch_idx % 10 == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            avg_loss = total_loss / num_batches
+            progress_bar.set_postfix(
+                loss=f"{avg_loss:.4f}",
+                lr=f"{current_lr:.2e}"
+            )
+
+        if accelerator.is_main_process:
+            progress_bar.update(1)
 
     # 关闭进度条
     if accelerator.is_main_process:
         progress_bar.close()
 
+    # 返回平均训练损失
+    avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    return avg_train_loss
 
-def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
+
+def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=False):
     """
     执行单个测试轮次
     
@@ -109,7 +164,14 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
 
     # 只在主进程显示进度条
     if accelerator.is_main_process:
-        progress_bar = tqdm(total=len(dataloader), desc=f"Epoch {epoch} Testing", unit="batch")
+        progress_bar = tqdm(
+            total=len(dataloader),
+            desc=f"Epoch {epoch} Testing",
+            unit="batch",
+            dynamic_ncols=True,
+            leave=False,
+            disable=is_grid_search  # 在网格搜索模式下禁用进度条
+        )
 
     # 禁用梯度计算以节省内存和加速推理
     with torch.no_grad():
@@ -147,7 +209,9 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
         # 计算平均损失和准确率
         avg_loss = (total_loss / total_samples).item()
         accuracy = 100. * total_correct.item() / total_samples.item()
-        print(f'Epoch {epoch} - Test Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
+
+        # 使用tqdm.write()输出摘要，不破坏进度条显示
+        tqdm.write(f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%')
 
         # 记录测试指标到实验追踪系统
         accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
@@ -157,7 +221,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
     return None, None
 
 
-def run_training(config, experiment_name=None):
+def run_training(config, experiment_name=None, is_grid_search=False):
     """
     执行完整的训练流程
     
@@ -204,42 +268,34 @@ def run_training(config, experiment_name=None):
     data_config = config.get('data', {})
     dataset_type = data_config.get('type', 'cifar10')
 
-    # 使用工厂函数创建数据加载器
-    train_dataloader, test_dataloader = create_dataloaders(
-        data_config=data_config,
+    # 使用简化的数据加载器创建函数
+    train_dataloader, test_dataloader, num_classes = create_dataloaders(
+        dataset_name=dataset_type,
+        data_dir=data_config.get('root', './data'),
         batch_size=hyperparams['batch_size'],
-        num_workers=data_config.get('num_workers', 4)
+        num_workers=data_config.get('num_workers', 4),
+        **data_config.get('params', {})
     )
     
     # 获取数据集信息
-    dataset_info = get_dataset_info(data_config)
+    dataset_info = get_dataset_info(dataset_type)
+    dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
     # 解析模型配置
     model_config = config.get('model', {})
-    model_type = model_config.get('type', 'simple_cnn')
+    model_name = model_config.get('name', 'resnet18')
 
-    # 配置模型参数
-    model_params = {
-        'num_classes': dataset_info['num_classes'],
-        'input_size': dataset_info['input_size'],
-        'dropout': hyperparams['dropout'],
-        'freeze_backbone': model_config.get('freeze_backbone', False)
-    }
-    
-    # 为自定义数据集添加额外参数
-    if dataset_type == 'custom':
-        model_params['input_features'] = data_config.get('input_features', 20)
-
-    # 合并用户在配置文件中指定的额外模型参数
-    model_params.update(model_config.get('params', {}))
-
-    # 使用工厂函数创建模型实例
-    model = get_model(model_type, **model_params)
+    # 使用简化的模型创建函数
+    model = get_model(
+        model_name=model_name,
+        num_classes=dataset_info['num_classes'],
+        **model_config.get('params', {})
+    )
 
     # 创建损失函数
     loss_config = config.get('loss', {})
     loss_fn = get_loss_function(
-        loss_config.get('type', 'cross_entropy'),
+        loss_config.get('name', 'crossentropy'),
         **loss_config.get('params', {})
     )
 
@@ -247,7 +303,7 @@ def run_training(config, experiment_name=None):
     optimizer_config = config.get('optimizer', {})
     optimizer = get_optimizer(
         model,
-        optimizer_config.get('type', 'adam'),
+        optimizer_config.get('name', 'adam'),
         hyperparams['learning_rate'],
         **optimizer_config.get('params', {})
     )
@@ -256,7 +312,7 @@ def run_training(config, experiment_name=None):
     scheduler_config = config.get('scheduler', {})
     lr_scheduler = get_scheduler(
         optimizer,
-        scheduler_config.get('type', 'onecycle'),
+        scheduler_config.get('name', 'onecycle'),
         max_lr=5 * hyperparams['learning_rate'],
         epochs=hyperparams['epochs'],
         steps_per_epoch=len(train_dataloader),
@@ -290,9 +346,12 @@ def run_training(config, experiment_name=None):
     if accelerator.is_main_process:
         print(f"\n=== 训练实验: {experiment_name} ===")
         print(f"数据集: {dataset_type}")
-        print(f"模型: {model_type}")
+        print(f"模型: {model_name}")
         print(f"参数: {hyperparams}")
         print("=" * 50)
+
+    # 设置结果目录
+    result_dir = os.path.join("runs", experiment_name) if experiment_name else None
 
     # 初始化最佳准确率追踪
     best_accuracy = 0.0
@@ -300,23 +359,52 @@ def run_training(config, experiment_name=None):
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
-            print(f"\nEpoch {epoch}/{hyperparams['epochs']}")
+            tqdm.write(f"\nEpoch {epoch}/{hyperparams['epochs']}")
 
         # 执行一轮训练和测试
-        train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
-        _, test_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch)
+        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, is_grid_search)
+        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, is_grid_search)
 
         # 更新并记录最佳准确率
-        if accelerator.is_main_process and test_accuracy and test_accuracy > best_accuracy:
-            best_accuracy = test_accuracy
-            print(f"新最佳准确率: {best_accuracy:.2f}%")
+        if accelerator.is_main_process and val_accuracy and val_accuracy > best_accuracy:
+            best_accuracy = val_accuracy
+            tqdm.write(f"新最佳准确率: {best_accuracy:.2f}%")
+
+        # 写入epoch级别的结构化数据
+        if accelerator.is_main_process and result_dir and val_accuracy is not None:
+            epoch_data = {
+                "event": "epoch_end",
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_acc": val_accuracy,
+                "best_acc": best_accuracy,
+                "timestamp": datetime.now().isoformat()
+            }
+            write_epoch_metrics(result_dir, epoch_data, accelerator)
 
     # 结束实验追踪，保存日志和结果
     accelerator.end_training()
 
-    # 打印训练完成信息
+    # 写入最终结果
     if accelerator.is_main_process:
-        print(f"\n训练完成! 最佳准确率: {best_accuracy:.2f}%")
+        tqdm.write(f"\n训练完成! 最佳准确率: {best_accuracy:.2f}%")
+
+        # 输出机器可读的结果行
+        result_json = {"best_accuracy": best_accuracy, "final_accuracy": best_accuracy}
+        print("##RESULT## " + json.dumps(result_json))
+
+        # 写入最终结果文件
+        if result_dir:
+            final_result = {
+                "experiment_name": experiment_name,
+                "best_accuracy": best_accuracy,
+                "final_accuracy": best_accuracy,
+                "total_epochs": hyperparams['epochs'],
+                "config": tracker_config,
+                "timestamp": datetime.now().isoformat()
+            }
+            write_final_result(result_dir, final_result, accelerator)
 
     # 返回训练结果摘要
     return {

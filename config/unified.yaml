@@ -37,9 +37,9 @@ gpu:
   device_ids: "2,3"
   auto_select: true
 
-# 模型配置（网格搜索时由model_type参数动态设置）
+# 模型配置
 model:
-  type: null  # 将由网格搜索的model_type参数覆盖
+  type: "resnet18"
   params: {}
 
 # 损失函数配置

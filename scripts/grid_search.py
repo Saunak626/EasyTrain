@@ -1,5 +1,4 @@
-"""
-网格搜索启动脚本
+"""网格搜索启动脚本
 支持参数网格搜索和预训练模型搜索（方案 1：子进程继承 TTY）
 """
 
@@ -17,6 +16,27 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments
+
+def is_accelerate_environment():
+    """检测是否已在accelerate环境中"""
+    return os.environ.get('ACCELERATE_USE_DEEPSPEED') is not None or \
+           os.environ.get('LOCAL_RANK') is not None or \
+           os.environ.get('WORLD_SIZE') is not None
+
+def launch_with_accelerate():
+    """使用accelerate launch重新启动当前脚本"""
+    # 获取当前脚本的所有参数，但移除--multi_gpu
+    current_args = [arg for arg in sys.argv[1:] if arg != '--multi_gpu']
+    
+    # 构建accelerate launch命令
+    cmd = ['accelerate', 'launch', sys.argv[0]] + current_args
+    
+    print(f"🚀 启动多卡网格搜索: {' '.join(cmd)}")
+    print("-" * 50)
+    
+    # 执行accelerate launch命令
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 # ----------------------------- 工具函数 -----------------------------
@@ -184,9 +204,8 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False):
     for k, v in (params or {}).items():
         cmd.extend([f"--{k}", str(v)])
 
-    # 多卡
-    if use_multi_gpu:
-        cmd.append("--multi_gpu")
+    # 注意：不再传递--multi_gpu参数给子进程
+    # 因为如果需要多卡训练，父进程已经通过accelerate launch启动了
 
     print(f"\n{'='*60}")
     print(f"🚀 开始实验 {exp_id}: {exp_name}")
@@ -279,6 +298,12 @@ def run_grid_search(args):
 def main():
     """主函数"""
     args, _ = parse_arguments(mode="grid_search")
+    
+    # 检查是否需要启动多卡训练
+    if args.multi_gpu and not is_accelerate_environment():
+        # 如果指定了多卡训练但不在accelerate环境中，重新启动
+        return launch_with_accelerate()
+    
     return run_grid_search(args)
 
 

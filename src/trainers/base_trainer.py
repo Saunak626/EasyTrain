@@ -23,7 +23,7 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 导入项目内部模块
-from src.models.image_net import get_model                      # 模型工厂函数
+from src.models.image_net import get_model                     # 模型工厂函数
 from src.losses.image_loss import get_loss_function            # 损失函数工厂函数
 from src.optimizers.optim import get_optimizer                 # 优化器工厂函数
 from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
@@ -223,9 +223,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=Fa
 
 def run_training(config, experiment_name=None, is_grid_search=False):
     """
-    执行完整的训练流程
-    
-    这是训练的主入口函数，负责整个训练过程的协调，包括：
+    训练的主入口函数，负责整个训练过程的协调，包括：
     - 环境初始化（随机种子、实验追踪）
     - 数据加载器创建
     - 模型、损失函数、优化器初始化

@@ -1,5 +1,8 @@
-"""网格搜索启动脚本
-支持参数网格搜索和预训练模型搜索（方案 1：子进程继承 TTY）
+"""
+网格搜索启动脚本
+- 调度器保持单进程运行
+- 每个实验独立用 accelerate 启动（多卡）或 python 启动（单卡/CPU）
+- 为每次实验设置唯一 MASTER_PORT，清理分布式环境变量，避免进程间串扰
 """
 
 import itertools
@@ -10,33 +13,13 @@ import sys
 import time
 import csv
 import json
+import random
 from datetime import datetime
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments
-
-def is_accelerate_environment():
-    """检测是否已在accelerate环境中"""
-    return os.environ.get('ACCELERATE_USE_DEEPSPEED') is not None or \
-           os.environ.get('LOCAL_RANK') is not None or \
-           os.environ.get('WORLD_SIZE') is not None
-
-def launch_with_accelerate():
-    """使用accelerate launch重新启动当前脚本"""
-    # 获取当前脚本的所有参数，但移除--multi_gpu
-    current_args = [arg for arg in sys.argv[1:] if arg != '--multi_gpu']
-    
-    # 构建accelerate launch命令
-    cmd = ['accelerate', 'launch', sys.argv[0]] + current_args
-    
-    print(f"🚀 启动多卡网格搜索: {' '.join(cmd)}")
-    print("-" * 50)
-    
-    # 执行accelerate launch命令
-    result = subprocess.run(cmd)
-    return result.returncode
 
 
 # ----------------------------- 工具函数 -----------------------------
@@ -56,22 +39,20 @@ def _as_list(v):
 
 def generate_combinations(config):
     """
-    生成所有参数组合（更通用）
-    支持三种写法（优先级从高到低）：
-    1) grid_search.combinations: 直接给出组合列表（list[dict]），将被原样返回
-    2) grid_search.grid: dict[str, list|scalar]，做笛卡尔积；标量会当作单元素列表
-    3) 若两者都没有，返回 [{}]
-
-    另外：
-    - grid_search.fixed: dict，固定参数，会并入每个组合
-    - 兼容 'model_type' → 'model_name'
+    生成所有参数组合（通用）
+    支持：
+      1) grid_search.combinations: 直接给出组合列表（list[dict]），原样遍历
+      2) grid_search.grid: dict[str, list|scalar] 做笛卡尔积（标量视作单元素列表）
+      3) 若都没有，返回 [{}]
+    另有：
+      - grid_search.fixed: dict 固定参数并入每个组合
+      - 兼容 'model_type' → 'model_name'
     """
-    gs = (config or {}).get("grid_search", {})
+    gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
 
-    # 写法 1：直接枚举好的组合
     combos = gs.get("combinations")
-    if isinstance(combos, list) and all(isinstance(x, dict) for x in combos) and combos:
+    if isinstance(combos, list) and combos and all(isinstance(x, dict) for x in combos):
         results = []
         for d in combos:
             merged = {**fixed, **d}
@@ -80,11 +61,10 @@ def generate_combinations(config):
             results.append(merged)
         return results
 
-    # 写法 2：笛卡尔积
-    grid = gs.get("grid", {})
+    grid = gs.get("grid", {}) or {}
     if grid:
         keys = list(grid.keys())
-        values_lists = [ _as_list(grid[k]) for k in keys ]
+        values_lists = [_as_list(grid[k]) for k in keys]
         if any(len(v) == 0 for v in values_lists):
             print("警告: grid 中存在空列表，已跳过空值键。")
             keys = [k for k, vals in zip(keys, values_lists) if len(vals) > 0]
@@ -103,7 +83,6 @@ def generate_combinations(config):
             combos = [{**fixed}]
         return combos
 
-    # 默认返回一个空组合（只有 fixed）
     return [{**fixed}] if fixed else [{}]
 
 
@@ -152,11 +131,10 @@ def parse_result_from_files(exp_name):
 
 
 def save_results_to_csv(results, filename):
-    """保存实验结果到CSV文件（统一保存到runs目录）"""
+    """保存实验结果到CSV文件（统一保存到 runs/ 目录）"""
     if not results:
         return None
 
-    # 统一使用runs目录，避免重复
     results_dir = "runs"
     os.makedirs(results_dir, exist_ok=True)
     filepath = os.path.join(results_dir, filename)
@@ -186,47 +164,100 @@ def save_results_to_csv(results, filename):
     return filepath
 
 
+# ----------------------------- 多卡子进程启动辅助 -----------------------------
+
+def _clean_env_for_child():
+    """
+    清理父进程里可能遗留的分布式环境变量，
+    防止子训练误以为自己加入了某个现存的 DDP 组。
+    """
+    env = os.environ.copy()
+    for k in ["LOCAL_RANK", "RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"]:
+        env.pop(k, None)
+    return env
+
+
+def _unique_master_port(base=20000, span=10000):
+    """为每个实验分配唯一端口，避免端口复用导致 NCCL 连接异常"""
+    return str(base + random.randint(0, span))
+
+
+def _infer_num_procs(gpu_ids: str | None) -> int:
+    """根据 gpu_ids 或实际设备数推断进程数"""
+    if gpu_ids:
+        return max(1, len([x for x in gpu_ids.split(",") if x.strip() != ""]))
+    env_ids = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    if env_ids:
+        return max(1, len([x for x in env_ids.split(",") if x.strip() != ""]))
+    try:
+        import torch
+        return max(1, torch.cuda.device_count())
+    except Exception:
+        return 1
+
+
 # ----------------------------- 核心逻辑 -----------------------------
 
-def run_single_experiment(params, exp_id, use_multi_gpu=False):
-    """运行单个实验（子进程继承 TTY，不捕获输出）"""
+def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/unified.yaml",
+                          gpu_ids=None, accelerate_args=""):
+    """运行单个实验（每个实验独立的进程/进程组）"""
     exp_name = f"grid_{exp_id}"
 
-    # 构建训练命令（不再传 --is_grid_search，避免 base_trainer 禁用 tqdm）
-    cmd = [
-        sys.executable, "-u",
-        "scripts/train.py",
-        "--config", "config/unified.yaml",
-        "--experiment_name", exp_name,
-    ]
+    # 组装命令
+    if use_multi_gpu:
+        num_procs = _infer_num_procs(gpu_ids)
+        cmd = [
+            "accelerate", "launch",
+            "--multi_gpu",
+            "--num_processes", str(num_procs),
+        ]
+        if gpu_ids:
+            cmd += ["--gpu_ids", gpu_ids]
+        # 透传用户额外的 accelerate 参数
+        if accelerate_args:
+            cmd += accelerate_args.split()
+        cmd += [
+            "scripts/train.py",
+            "--config", config_path,
+            "--experiment_name", exp_name,
+            # 不传 --is_grid_search，保留 tqdm 进度（每个 epoch 同行刷新）
+        ]
+    else:
+        cmd = [
+            sys.executable, "-u",
+            "scripts/train.py",
+            "--config", config_path,
+            "--experiment_name", exp_name,
+        ]
 
-    # 添加参数
+    # 添加参数覆盖
     for k, v in (params or {}).items():
         cmd.extend([f"--{k}", str(v)])
-
-    # 注意：不再传递--multi_gpu参数给子进程
-    # 因为如果需要多卡训练，父进程已经通过accelerate launch启动了
 
     print(f"\n{'='*60}")
     print(f"🚀 开始实验 {exp_id}: {exp_name}")
     print(f"📋 参数: {params}")
     print(f"{'='*60}")
 
-    # 让子进程直接继承父进程终端（TTY），以便 tqdm 同行刷新
-    process = subprocess.Popen(cmd)
+    # 清理父环境 + 为本实验设置唯一端口
+    env = _clean_env_for_child()
+    env["MASTER_ADDR"] = env.get("MASTER_ADDR", "127.0.0.1")
+    env["MASTER_PORT"] = _unique_master_port()
+
+    # 直接继承 TTY，保留 tqdm 一行刷新
+    process = subprocess.Popen(cmd, env=env)
     rc = process.wait()
     success = (rc == 0)
 
-    # 解析训练结果（仅读文件）
+    # 从文件解析结果
     best_accuracy, final_accuracy = parse_result_from_files(exp_name)
-
     if success:
         if best_accuracy == 0.0 and final_accuracy == 0.0:
-            print(f"⚠️  {exp_name} 结束，但未找到结果文件。请检查 runs/{exp_name}/ 是否生成 result.json 或 metrics.jsonl。")
+            print(f"⚠️  {exp_name} 结束，但未找到结果文件。请检查 runs/{exp_name}/。")
         else:
-            print(f"✅ 实验 {exp_name} 完成，最佳准确率: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
+            print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
     else:
-        print(f"❌ 实验 {exp_name} 失败（返回码 {rc}）。建议查看 runs/{exp_name}/ 及控制台输出定位问题。")
+        print(f"❌ 实验 {exp_name} 失败（返回码 {rc}）。请查看控制台与 runs/{exp_name}/。")
 
     return {
         "success": success,
@@ -238,7 +269,7 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False):
 
 
 def run_grid_search(args):
-    """运行网格搜索"""
+    """运行网格搜索（串行，确保资源干净释放）"""
     config = load_grid_config(args.config)
     combinations = generate_combinations(config)
 
@@ -256,12 +287,20 @@ def run_grid_search(args):
 
     for i, params in enumerate(combinations, 1):
         print(f"\n📊 准备实验 {i}/{len(combinations)}")
-        result = run_single_experiment(params, f"{i:03d}", args.multi_gpu)
+
+        result = run_single_experiment(
+            params, f"{i:03d}",
+            use_multi_gpu=args.multi_gpu,
+            config_path="config/unified.yaml",     # 训练使用的统一配置
+            gpu_ids=args.gpu_ids,
+            accelerate_args=(args.accelerate_args or "")
+        )
         results.append(result)
         if result["success"]:
             successful += 1
-        # 给出视觉分隔
-        time.sleep(0.5)
+
+        # 适当间隔，便于观察分隔，也给系统时间释放端口/句柄
+        time.sleep(0.5 if not args.multi_gpu else 1.0)
 
     # 总结
     print("\n" + "=" * 60)
@@ -296,14 +335,8 @@ def run_grid_search(args):
 
 
 def main():
-    """主函数"""
+    """主函数：调度器始终单进程，不进入 Accelerate 环境"""
     args, _ = parse_arguments(mode="grid_search")
-    
-    # 检查是否需要启动多卡训练
-    if args.multi_gpu and not is_accelerate_environment():
-        # 如果指定了多卡训练但不在accelerate环境中，重新启动
-        return launch_with_accelerate()
-    
     return run_grid_search(args)
 
 

@@ -4,8 +4,8 @@
 # 超参数配置
 hyperparameters:
   learning_rate: 0.001
-  batch_size: 128
-  epochs: 10
+  batch_size: 256
+  epochs: 3
   dropout: 0.1
 
 # 训练配置
@@ -65,9 +65,9 @@ grid_search:
   # 网格搜索参数定义
   grid:
     learning_rate: [0.001]
-    batch_size: [64]
+    batch_size: [256]
     dropout: [0.1]
-    epochs: [5]
+    epochs: [3]
     model_type: ["resnet18", "resnet50", "efficientnet_b0"]
   
   # 网格搜索设置

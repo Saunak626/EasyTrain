@@ -90,11 +90,3 @@ def parse_arguments(mode="train"):
     return args, config
 
 
-def parse_single_training_arguments():
-    """解析单次训练参数（保持向后兼容）"""
-    return parse_arguments("train")
-
-
-def parse_grid_search_arguments():
-    """解析网格搜索参数（保持向后兼容）"""
-    return parse_arguments("grid_search")

@@ -291,7 +291,7 @@ def run_grid_search(args):
         result = run_single_experiment(
             params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
-            config_path="config/unified.yaml",     # 训练使用的统一配置
+            config_path="config/grid.yaml",     # 训练使用的统一配置
             gpu_ids=args.gpu_ids,
             accelerate_args=(args.accelerate_args or "")
         )

@@ -5,8 +5,8 @@
 # 超参数配置
 hyperparameters:
   learning_rate: 0.001    # 学习率
-  batch_size: 128         # 批大小
-  epochs: 10              # 训练轮数
+  batch_size: 256         # 批大小
+  epochs: 3               # 训练轮数
   dropout: 0.1            # Dropout比例
 
 # 训练配置

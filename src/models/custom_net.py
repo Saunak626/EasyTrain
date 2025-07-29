@@ -99,13 +99,3 @@ class CustomResNet(nn.Module):
         x = torch.flatten(x, 1)
         x = self.fc(x)
         return x
-
-
-def get_custom_model(model_type='simple', **kwargs):
-    """获取自定义模型"""
-    if model_type == 'simple':
-        return CustomModel(**kwargs)
-    elif model_type == 'resnet':
-        return CustomResNet(**kwargs)
-    else:
-        return CustomModel(**kwargs)

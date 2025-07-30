@@ -34,7 +34,7 @@ def create_base_parser(description):
     # parser.add_argument("--gpu_ids", type=str, help="指定GPU ID（如：0,1 或 2,3）")
     # parser.add_argument("--use_cpu", action="store_true", help="强制使用CPU训练")
     parser.add_argument("--multi_gpu", action="store_true", help="使用多卡训练（由调度器/子训练决定）")
-    parser.add_argument("--accelerate_args", type=str, default="", help="透传给 accelerate launch 的额外参数")
+    # parser.add_argument("--accelerate_args", type=str, default="", help="透传给 accelerate launch 的额外参数")
     
     # 网格搜索相关参数
     parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")

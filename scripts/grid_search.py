@@ -4,7 +4,6 @@
 - 每个实验独立用 accelerate 启动（多卡）或 python 启动（单卡/CPU）
 - 为每次实验设置唯一 MASTER_PORT，清理分布式环境变量，避免进程间串扰
 """
-
 import itertools
 import subprocess
 import yaml
@@ -14,15 +13,14 @@ import time
 import csv
 import json
 import random
+import torch 
+
 from datetime import datetime
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments
-
-
-# ----------------------------- 工具函数 -----------------------------
 
 def load_grid_config(path="config/grid.yaml"):
     """加载网格搜索配置"""
@@ -39,8 +37,8 @@ def _as_list(v):
 def generate_combinations(config):
     """
     只支持笛卡尔积：
-      - grid_search.grid: dict[str, list|scalar]，标量会当作单元素列表
-      - grid_search.fixed: dict，固定参数并入每个组合
+    - grid_search.grid: dict[str, list|scalar]，标量会当作单元素列表
+    - grid_search.fixed: dict，固定参数并入每个组合
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
@@ -60,7 +58,6 @@ def generate_combinations(config):
     # 笛卡尔积生成组合，并合并 fixed
     return [{**fixed, **dict(zip(keys, combo))} 
             for combo in itertools.product(*values_lists)]
-
 
 def parse_result_from_files(exp_name):
     """从结构化文件中解析最终结果（优先 result.json，回退 metrics.jsonl）"""
@@ -153,9 +150,6 @@ def _unique_master_port(base=20000, span=10000):
 
 
 def _infer_num_procs() -> int:
-    """根据 gpu_ids 或实际设备数推断进程数"""
-    # if gpu_ids:
-    #     return max(1, len([x for x in gpu_ids.split(",") if x.strip() != ""]))
     env_ids = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
     if env_ids:
         return max(1, len([x for x in env_ids.split(",") if x.strip() != ""]))
@@ -166,18 +160,13 @@ def _infer_num_procs() -> int:
         return 1
 
 
-# ----------------------------- 核心逻辑 -----------------------------
-
-def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml",
-                        accelerate_args=""):
+def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"): #, accelerate_args=""):
     """运行单个实验（每个实验独立的进程/进程组）"""
     exp_name = f"grid_{exp_id}"
 
     # 组装基础命令
     if use_multi_gpu:
-        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(_infer_num_procs())]
-        if accelerate_args:
-            cmd.extend(accelerate_args.split())
+        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(torch.cuda.device_count())]
     else:
         cmd = [sys.executable, "-u"]
     
@@ -245,9 +234,7 @@ def run_grid_search(args):
         result = run_single_experiment(
             params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
-            config_path="config/grid.yaml",     # 训练使用的统一配置
-            # gpu_ids=args.gpu_ids,
-            accelerate_args=(args.accelerate_args or "")
+            config_path=args.config,#"config/grid.yaml",     # 训练使用的统一配置
         )
         results.append(result)
         if result["success"]:

@@ -63,13 +63,14 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     反向传播、参数更新和学习率调整。支持多GPU分布式训练。
 
     Args:
-        dataloader: 训练数据加载器，提供批次数据
-        model: 神经网络模型
-        loss_fn: 损失函数，用于计算预测与真实标签的差异
-        optimizer: 优化器，用于更新模型参数
-        lr_scheduler: 学习率调度器，动态调整学习率
-        accelerator: Accelerator实例，处理多GPU和混合精度训练
-        epoch: 当前训练轮次编号
+        dataloader (torch.utils.data.DataLoader): 训练数据加载器，提供批次数据
+        model (torch.nn.Module): 神经网络模型
+        loss_fn (torch.nn.Module): 损失函数，用于计算预测与真实标签的差异
+        optimizer (torch.optim.Optimizer): 优化器，用于更新模型参数
+        lr_scheduler (torch.optim.lr_scheduler._LRScheduler): 学习率调度器，动态调整学习率
+        accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU和混合精度训练
+        epoch (int): 当前训练轮次编号
+        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         float: 平均训练损失
@@ -144,11 +145,12 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=Fa
     支持多GPU环境下的指标聚合，确保结果的准确性。
 
     Args:
-        dataloader: 测试数据加载器，提供测试批次数据
-        model: 神经网络模型
-        loss_fn: 损失函数，用于计算测试损失
-        accelerator: Accelerator实例，处理多GPU指标聚合
-        epoch: 当前测试轮次编号
+        dataloader (torch.utils.data.DataLoader): 测试数据加载器，提供测试批次数据
+        model (torch.nn.Module): 神经网络模型
+        loss_fn (torch.nn.Module): 损失函数，用于计算测试损失
+        accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU指标聚合
+        epoch (int): 当前测试轮次编号
+        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         tuple: (平均损失, 准确率百分比) 或 (None, None) 如果不是主进程
@@ -234,6 +236,7 @@ def run_training(config, experiment_name=None, is_grid_search=False):
     Args:
         config (dict): 包含所有训练配置的字典，包括模型、数据、超参数等设置
         experiment_name (str, optional): 实验名称，用于追踪和日志记录
+        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         dict: 训练结果字典，包含实验名称、最佳准确率和配置信息

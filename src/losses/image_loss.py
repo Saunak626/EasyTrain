@@ -10,7 +10,15 @@ import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
     """
-    Focal Loss for addressing class imbalance
+    Focal Loss损失函数，用于解决类别不平衡问题
+    
+    通过降低易分类样本的权重，让模型更关注难分类样本。
+    原论文：https://arxiv.org/abs/1708.02002
+    
+    Args:
+        alpha (float, optional): 平衡因子，用于平衡正负样本，默认为1
+        gamma (float, optional): 调制因子，用于调整难易样本的权重，默认为2
+        reduction (str, optional): 损失聚合方式，'mean'或'sum'，默认为'mean'
     """
     
     def __init__(self, alpha=1, gamma=2, reduction='mean'):
@@ -20,6 +28,16 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
     
     def forward(self, inputs, targets):
+        """
+        计算Focal Loss
+        
+        Args:
+            inputs (torch.Tensor): 模型输出的logits，形状为(batch_size, num_classes)
+            targets (torch.Tensor): 真实标签，形状为(batch_size,)
+            
+        Returns:
+            torch.Tensor: 计算得到的Focal Loss
+        """
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
@@ -34,7 +52,14 @@ class FocalLoss(nn.Module):
 
 class LabelSmoothingLoss(nn.Module):
     """
-    Label Smoothing Loss
+    标签平滑损失函数，用于提高模型的泛化能力
+    
+    通过在真实标签中添加噪声，防止模型对训练数据过拟合。
+    原论文：https://arxiv.org/abs/1512.00567
+    
+    Args:
+        num_classes (int): 类别数量
+        smoothing (float, optional): 平滑系数，取值范围[0,1)，默认为0.1
     """
     
     def __init__(self, num_classes, smoothing=0.1):
@@ -44,6 +69,16 @@ class LabelSmoothingLoss(nn.Module):
         self.confidence = 1.0 - smoothing
     
     def forward(self, inputs, targets):
+        """
+        计算标签平滑损失
+        
+        Args:
+            inputs (torch.Tensor): 模型输出的logits，形状为(batch_size, num_classes)
+            targets (torch.Tensor): 真实标签，形状为(batch_size,)
+            
+        Returns:
+            torch.Tensor: 计算得到的标签平滑损失
+        """
         log_probs = F.log_softmax(inputs, dim=1)
         targets_one_hot = torch.zeros_like(log_probs).scatter_(1, targets.unsqueeze(1), 1)
         targets_smooth = targets_one_hot * self.confidence + (1 - targets_one_hot) * self.smoothing / (self.num_classes - 1)
@@ -53,11 +88,21 @@ class LabelSmoothingLoss(nn.Module):
 
 def get_loss_function(loss_name, **kwargs):
     """
-    获取损失函数
+    损失函数工厂函数，创建并配置损失函数实例
     
     Args:
-        loss_name: 损失函数名称
-        **kwargs: 损失函数参数
+        loss_name (str): 损失函数名称，支持'crossentropy', 'focal', 'labelsmoothing', 'mse'
+        **kwargs: 损失函数参数，如weight, alpha, gamma, num_classes等
+        
+    Returns:
+        torch.nn.Module: 配置好的损失函数实例
+        
+    Raises:
+        ValueError: 当指定的损失函数名称不支持时
+        
+    示例：
+        >>> loss_fn = get_loss_function('crossentropy')
+        >>> loss_fn = get_loss_function('focal', alpha=1.0, gamma=2.0)
     """
     loss_name = loss_name.lower()
 

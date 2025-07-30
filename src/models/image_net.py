@@ -9,9 +9,28 @@ from torchvision import models
 
 
 class ImageNetModel(nn.Module):
-    """预训练图像分类模型"""
+    """预训练图像分类模型
+    
+    提供基于timm和torchvision的预训练模型，支持多种主流网络架构，
+    针对小尺寸图像（如CIFAR-10）进行了优化适配。
+    
+    Attributes:
+        model_name (str): 模型名称
+        num_classes (int): 输出类别数
+        backbone (nn.Module): 基础网络模型
+    """
     
     def __init__(self, model_name='resnet18', num_classes=10, pretrained=True, **kwargs):
+        """
+        初始化图像分类模型
+        
+        Args:
+            model_name (str, optional): 模型名称，支持'resnet18', 'resnet50', 
+                'efficientnet_b0', 'mobilenet_v2', 'densenet121'等，默认为'resnet18'
+            num_classes (int, optional): 输出类别数，默认为10
+            pretrained (bool, optional): 是否使用预训练权重，默认为True
+            **kwargs: 其他模型参数（目前未使用）
+        """
         super().__init__()
         self.model_name = model_name
         self.num_classes = num_classes
@@ -39,9 +58,28 @@ class ImageNetModel(nn.Module):
                 self.backbone.classifier = nn.Linear(1024, num_classes)
     
     def forward(self, x):
+        """
+        前向传播
+        
+        Args:
+            x (torch.Tensor): 输入图像张量，形状为(batch_size, channels, height, width)
+            
+        Returns:
+            torch.Tensor: 输出 logits，形状为(batch_size, num_classes)
+        """
         return self.backbone(x)
 
 
 def get_model(model_name='resnet18', **kwargs):
-    """获取模型实例"""
+    """
+    模型工厂函数，创建预训练图像分类模型实例
+    
+    Args:
+        model_name (str, optional): 模型名称，支持'resnet18', 'resnet50', 
+            'efficientnet_b0', 'mobilenet_v2', 'densenet121'等，默认为'resnet18'
+        **kwargs: 传递给ImageNetModel的其他参数，如num_classes, pretrained等
+        
+    Returns:
+        ImageNetModel: 配置好的模型实例
+    """
     return ImageNetModel(model_name=model_name, **kwargs)

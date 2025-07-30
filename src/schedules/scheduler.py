@@ -9,12 +9,22 @@ import torch.optim.lr_scheduler as lr_scheduler
 
 def get_scheduler(optimizer, scheduler_name, **kwargs):
     """
-    获取学习率调度器
+    学习率调度器工厂函数，创建并配置学习率调度器实例
     
     Args:
-        optimizer: 优化器
-        scheduler_name: 调度器名称
-        **kwargs: 调度器参数
+        optimizer (torch.optim.Optimizer): 优化器实例
+        scheduler_name (str): 调度器名称，支持'onecycle', 'step', 'cosine', 'plateau'
+        **kwargs: 调度器参数，如max_lr, epochs, step_size等
+        
+    Returns:
+        torch.optim.lr_scheduler._LRScheduler: 配置好的学习率调度器实例
+        
+    Raises:
+        ValueError: 当指定的调度器名称不支持时
+        
+    示例：
+        >>> scheduler = get_scheduler(optimizer, 'onecycle', max_lr=0.1, epochs=100)
+        >>> scheduler = get_scheduler(optimizer, 'step', step_size=30, gamma=0.1)
     """
     scheduler_name = scheduler_name.lower()
 

@@ -9,13 +9,23 @@ import torch.optim as optim
 
 def get_optimizer(model, optimizer_name, learning_rate, **kwargs):
     """
-    获取优化器
+    优化器工厂函数，创建并配置优化器实例
     
     Args:
-        model: 模型
-        optimizer_name: 优化器名称
-        learning_rate: 学习率
-        **kwargs: 其他优化器参数
+        model (torch.nn.Module): 神经网络模型，用于获取可训练参数
+        optimizer_name (str): 优化器名称，支持'adam', 'adamw', 'sgd'
+        learning_rate (float): 学习率
+        **kwargs: 其他优化器参数，如weight_decay, momentum, betas等
+        
+    Returns:
+        torch.optim.Optimizer: 配置好的优化器实例
+        
+    Raises:
+        ValueError: 当指定的优化器名称不支持时
+    
+    示例：
+        >>> optimizer = get_optimizer(model, 'adam', 0.001, weight_decay=0.01)
+        >>> optimizer = get_optimizer(model, 'sgd', 0.1, momentum=0.9)
     """
     optimizer_name = optimizer_name.lower()
 

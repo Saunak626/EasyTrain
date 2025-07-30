@@ -11,17 +11,20 @@ from .custom_dataset import CustomDatasetWrapper
 
 def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwargs):
     """
-    创建数据加载器
+    统一的数据加载器创建函数
     
     Args:
-        dataset_name: 数据集名称 ('cifar10' 或 'custom')
-        data_dir: 数据目录
-        batch_size: 批大小
-        num_workers: 工作进程数
-        **kwargs: 其他参数
-    
+        dataset_name (str): 数据集名称，支持'cifar10'或'custom'
+        data_dir (str): 数据存储根目录路径
+        batch_size (int): 批大小
+        num_workers (int, optional): 数据加载的工作进程数，默认为4
+        **kwargs: 其他数据集特定参数，如augment, download, csv_file等
+        
     Returns:
-        tuple: (train_loader, test_loader, num_classes)
+        tuple: (train_loader, test_loader, num_classes) 训练和测试数据加载器及类别数
+        
+    Raises:
+        ValueError: 当指定的数据集名称不支持时
     """
     dataset_name = dataset_name.lower()
 
@@ -74,13 +77,16 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
 
 def get_dataset_info(dataset_name):
     """
-    获取数据集信息
+    获取数据集基本信息
     
     Args:
-        dataset_name: 数据集名称
-    
+        dataset_name (str): 数据集名称，支持'cifar10'或'custom'
+        
     Returns:
-        dict: 数据集信息字典
+        dict: 包含数据集名称、类别数、输入尺寸和类别列表的字典
+        
+    Raises:
+        ValueError: 当指定的数据集名称不支持时
     """
     dataset_name = dataset_name.lower()
     

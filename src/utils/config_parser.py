@@ -12,6 +12,10 @@ def setup_gpu_config(args, config):
 
     重要：若已在 Accelerate/torchrun 子进程中（存在 LOCAL_RANK），
     不要再改 CUDA_VISIBLE_DEVICES，避免设备映射与进程组不一致。
+    
+    Args:
+        args: 命令行参数对象
+        config: 配置字典
     """
     # 已在 Accelerate 子进程：Accelerate 自己会处理 device mapping
     if os.environ.get("LOCAL_RANK") is not None:
@@ -35,7 +39,15 @@ def setup_gpu_config(args, config):
 
 
 def create_base_parser(description):
-    """创建基础参数解析器"""
+    """
+    创建基础参数解析器
+    
+    Args:
+        description (str): 解析器描述信息
+        
+    Returns:
+        argparse.ArgumentParser: 配置好的参数解析器
+    """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--config", type=str, default="config/grid.yaml", help="配置文件路径")
     parser.add_argument("--gpu_ids", type=str, help="指定GPU ID（如：0,1 或 2,3）")
@@ -46,7 +58,15 @@ def create_base_parser(description):
 
 
 def parse_arguments(mode="train"):
-    """统一的参数解析函数"""
+    """
+    统一的参数解析函数，处理命令行参数和配置文件
+    
+    Args:
+        mode (str, optional): 运行模式，'train'或'grid_search'，默认为'train'
+        
+    Returns:
+        tuple: (args, config) 解析后的命令行参数和配置字典
+    """
     if mode == "train":
         parser = create_base_parser("单次训练")
         # 训练特定参数

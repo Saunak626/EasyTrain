@@ -37,53 +37,49 @@ def _as_list(v):
     return v if isinstance(v, (list, tuple)) else [v]
 
 
+def _as_list(v):
+    """标量→单元素列表；列表/元组原样；None→空列表"""
+    if v is None:
+        return []
+    return v if isinstance(v, (list, tuple)) else [v]
+
 def generate_combinations(config):
     """
-    生成所有参数组合（通用）
-    支持：
-      1) grid_search.combinations: 直接给出组合列表（list[dict]），原样遍历
-      2) grid_search.grid: dict[str, list|scalar] 做笛卡尔积（标量视作单元素列表）
-      3) 若都没有，返回 [{}]
-    另有：
-      - grid_search.fixed: dict 固定参数并入每个组合
-      - 兼容 'model_type' → 'model_name'
+    只支持笛卡尔积：
+      - grid_search.grid: dict[str, list|scalar]，标量会当作单元素列表
+      - grid_search.fixed: dict，固定参数并入每个组合
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
-
-    combos = gs.get("combinations")
-    if isinstance(combos, list) and combos and all(isinstance(x, dict) for x in combos):
-        results = []
-        for d in combos:
-            merged = {**fixed, **d}
-            if "model_type" in merged and "model_name" not in merged:
-                merged["model_name"] = merged.pop("model_type")
-            results.append(merged)
-        return results
-
     grid = gs.get("grid", {}) or {}
-    if grid:
-        keys = list(grid.keys())
-        values_lists = [_as_list(grid[k]) for k in keys]
-        if any(len(v) == 0 for v in values_lists):
-            print("警告: grid 中存在空列表，已跳过空值键。")
-            keys = [k for k, vals in zip(keys, values_lists) if len(vals) > 0]
-            values_lists = [vals for vals in values_lists if len(vals) > 0]
 
-        combos = []
-        for combo in itertools.product(*values_lists) if values_lists else [()]:
-            param_set = dict(zip(keys, combo))
-            param_set = {**fixed, **param_set}
-            if "model_type" in param_set and "model_name" not in param_set:
-                param_set["model_name"] = param_set.pop("model_type")
-            combos.append(param_set)
+    # 若未提供 grid，则仅返回 fixed（或空字典）作为单一组合
+    if not grid:
+        return [fixed] if fixed else [{}]
 
-        if not combos:
-            print("警告: 网格为空，使用固定参数。")
-            combos = [{**fixed}]
-        return combos
+    keys = list(grid.keys())
+    values_lists = [_as_list(grid[k]) for k in keys]
 
-    return [{**fixed}] if fixed else [{}]
+    # 过滤空列表的键，避免生成空组合
+    keep = [(k, vs) for k, vs in zip(keys, values_lists) if len(vs) > 0]
+    if len(keep) != len(keys):
+        print("警告: grid 中存在空列表，已跳过对应键。")
+
+    if not keep:
+        # 所有键的取值都为空，退化为仅 fixed（或空字典）
+        return [fixed] if fixed else [{}]
+
+    keys, values_lists = zip(*keep)
+    keys, values_lists = list(keys), list(values_lists)
+
+    # 笛卡尔积生成组合，并合并 fixed
+    combos = []
+    for combo in itertools.product(*values_lists):
+        params = dict(zip(keys, combo))
+        params = {**fixed, **params}
+        combos.append(params)
+
+    return combos
 
 
 def parse_result_from_files(exp_name):
@@ -198,7 +194,7 @@ def _infer_num_procs(gpu_ids: str | None) -> int:
 
 # ----------------------------- 核心逻辑 -----------------------------
 
-def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/unified.yaml",
+def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml",
                           gpu_ids=None, accelerate_args=""):
     """运行单个实验（每个实验独立的进程/进程组）"""
     exp_name = f"grid_{exp_id}"
@@ -220,7 +216,6 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
             "scripts/train.py",
             "--config", config_path,
             "--experiment_name", exp_name,
-            # 不传 --is_grid_search，保留 tqdm 进度（每个 epoch 同行刷新）
         ]
     else:
         cmd = [

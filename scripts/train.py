@@ -1,7 +1,7 @@
-"""单次训练流程的入口点，主要功能包括：
+"""训练流程的入口点（统一网格搜索模式），主要功能包括：
 1. 解析命令行参数和配置文件
 2. 根据参数决定是否使用多GPU训练
-3. 启动训练过程
+3. 启动网格搜索训练过程
 4. 显示训练结果
 """
 import sys
@@ -14,6 +14,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments  # 参数解析器
 from src.trainers.base_trainer import run_training   # 核心训练函数
+
+# 导入网格搜索模块
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from grid_search import run_grid_search
 
 def launch_with_accelerate():
     """使用accelerate launch重新启动当前脚本"""
@@ -40,23 +45,30 @@ def print_training_info(args, config):
 
 
 def main():
-    """主函数，处理单次实验训练"""
-    # 解析命令行参数和配置文件
-    args, config = parse_arguments(mode='train')
-    
-    # 检查是否需要启动多卡训练
-    # 如果指定了多卡，并且环境中没有 'LOCAL_RANK'，则重新启动
-    # if args.multi_gpu and 'LOCAL_RANK' not in os.environ:
-    #     return launch_with_accelerate()
-    
-    # 打印训练信息
-    print_training_info(args, config)
-    
-    # 获取实验名称并启动训练
-    experiment_name = config['training']['experiment_name']
-    result = run_training(config, experiment_name) # , args.is_grid_search)
-    
-    return 0
+    """主函数，处理网格搜索训练（统一模式）"""
+    # 检查是否是单个实验调用（来自网格搜索）
+    if '--experiment_name' in sys.argv:
+        # 这是网格搜索中的单个实验
+        args, config = parse_arguments(mode='single_experiment')
+        
+        # 打印训练信息
+        print_training_info(args, config)
+        
+        # 获取实验名称并启动训练
+        experiment_name = config['training']['experiment_name']
+        result = run_training(config, experiment_name)
+        
+        return 0
+    else:
+        # 这是主网格搜索调用
+        args, config = parse_arguments(mode='grid_search')
+        
+        print("🚀 启动网格搜索训练模式")
+        print(f"📊 配置文件: {args.config}")
+        print("-" * 50)
+        
+        # 调用网格搜索
+        return run_grid_search(args)
 
 
 # 程序入口点

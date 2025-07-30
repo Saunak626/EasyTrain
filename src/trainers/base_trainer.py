@@ -55,7 +55,7 @@ def write_final_result(result_dir, result_data, accelerator):
         json.dump(result_data, f, ensure_ascii=False, indent=2)
 
 
-def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch): #, is_grid_search=False):
+def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
     """
     执行单个训练轮次
 
@@ -70,7 +70,6 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         lr_scheduler (torch.optim.lr_scheduler._LRScheduler): 学习率调度器，动态调整学习率
         accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU和混合精度训练
         epoch (int): 当前训练轮次编号
-        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         float: 平均训练损失
@@ -90,7 +89,6 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
             unit="batch",
             dynamic_ncols=True,
             leave=False,
-            # disable=is_grid_search  # 在网格搜索模式下禁用进度条
         )
 
     # 遍历训练数据的每个批次
@@ -137,7 +135,7 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     return avg_train_loss
 
 
-def test_epoch(dataloader, model, loss_fn, accelerator, epoch): #, is_grid_search=False):
+def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
     """
     执行单个测试轮次
     
@@ -150,7 +148,6 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch): #, is_grid_searc
         loss_fn (torch.nn.Module): 损失函数，用于计算测试损失
         accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU指标聚合
         epoch (int): 当前测试轮次编号
-        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         tuple: (平均损失, 准确率百分比) 或 (None, None) 如果不是主进程
@@ -172,7 +169,6 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch): #, is_grid_searc
             unit="batch",
             dynamic_ncols=True,
             leave=False,
-            # disable=is_grid_search  # 在网格搜索模式下禁用进度条
         )
 
     # 禁用梯度计算以节省内存和加速推理
@@ -223,7 +219,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch): #, is_grid_searc
     return None, None
 
 
-def run_training(config, experiment_name=None): #, is_grid_search=False):
+def run_training(config, experiment_name=None):
     """
     训练的主入口函数，负责整个训练过程的协调，包括：
     - 环境初始化（随机种子、实验追踪）
@@ -236,7 +232,6 @@ def run_training(config, experiment_name=None): #, is_grid_search=False):
     Args:
         config (dict): 包含所有训练配置的字典，包括模型、数据、超参数等设置
         experiment_name (str, optional): 实验名称，用于追踪和日志记录
-        is_grid_search (bool, optional): 是否为网格搜索模式，默认为False
 
     Returns:
         dict: 训练结果字典，包含实验名称、最佳准确率和配置信息
@@ -363,8 +358,9 @@ def run_training(config, experiment_name=None): #, is_grid_search=False):
             tqdm.write(f"\nEpoch {epoch}/{hyperparams['epochs']}")
 
         # 执行一轮训练和测试
-        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch) #, is_grid_search)
-        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch) #, is_grid_search)
+        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
+        
+        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch)
 
         # 更新并记录最佳准确率
         if accelerator.is_main_process and val_accuracy and val_accuracy > best_accuracy:

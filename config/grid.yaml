@@ -1,13 +1,5 @@
-# 统一配置文件
-# 支持单次训练和网格搜索的通用配置
-
-# 超参数配置
-hyperparameters:
-  learning_rate: 0.001
-  # 256/4G显存
-  batch_size: 2560
-  epochs: 3
-  dropout: 0.1
+# 网格搜索统一配置文件
+# 所有训练都通过网格搜索模式进行
 
 # 训练配置
 training:
@@ -38,47 +30,40 @@ gpu:
   device_ids: "2,3"
   auto_select: true
 
-# 模型配置（网格搜索时由model_type参数动态设置）
-model:
-  type: null  # 将由网格搜索的model_type参数覆盖
-  params: {}
 
-# 损失函数配置
-loss:
-  type: "cross_entropy"
-  params: {}
-
-# 优化器配置
-optimizer:
-  type: "adam"
-  params:
-    weight_decay: 0
-
-# 学习率调度器配置
-scheduler:
-  type: "onecycle"
-  params:
-    step_size: 10
-    gamma: 0.1
-
-# 网格搜索配置
-grid_search:
-  # 网格搜索参数定义
-  grid:
-    learning_rate: [0.001]
-    batch_size: [256]
-    dropout: [0.1]
-    epochs: [5]
-    model_type: ["resnet18", "resnet50", "efficientnet_b0"]
-  
-  # 网格搜索设置
-  max_experiments: 50
-  continue_on_error: true
-  parallel_jobs: 1
-  save_results: true
-  results_file: "grid_search_results.csv"
 
 # 多卡训练配置
 multi_gpu:
   enabled: true
-  strategy: "ddp"
+  strategy: "ddp"  
+
+# 网格搜索设置
+max_experiments: 50
+continue_on_error: true
+parallel_jobs: 1
+save_results: true
+results_file: "grid_search_results.csv"
+
+
+# 网格搜索配置
+grid_search:
+  # 网格搜索参数定义（所有超参数都在这里配置）
+  grid:
+    # 模型相关参数
+    model_name: ["resnet18", "resnet50", "efficientnet_b0"]
+    
+    # 超参数
+    learning_rate: [0.001]
+    batch_size: [512]
+    dropout: [0.01]
+    epochs: [3]
+    
+    # 损失函数
+    loss: ["cross_entropy"]
+
+    # 优化器参数
+    optimizer_type: ["adam"]
+    weight_decay: [0.0001]
+    
+    # 调度器参数
+    scheduler_type: ["onecycle"]

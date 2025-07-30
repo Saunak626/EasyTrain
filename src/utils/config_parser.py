@@ -40,7 +40,7 @@ def setup_gpu_config(args, config):
 
 def create_base_parser(description):
     """
-    创建基础参数解析器
+    创建基础参数解析器（统一网格搜索模式）
     
     Args:
         description (str): 解析器描述信息
@@ -54,35 +54,41 @@ def create_base_parser(description):
     parser.add_argument("--use_cpu", action="store_true", help="强制使用CPU训练")
     parser.add_argument("--multi_gpu", action="store_true", help="使用多卡训练（由调度器/子训练决定）")
     parser.add_argument("--accelerate_args", type=str, default="", help="透传给 accelerate launch 的额外参数")
+    
+    # 网格搜索相关参数
+    parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")
+    parser.add_argument("--save_results", action="store_true", default=True, help="保存结果")
+    parser.add_argument("--results_file", type=str, default="grid_search_results.csv", help="结果文件名")
+    
+    # 单个实验参数覆盖（用于网格搜索中的单个实验）
+    parser.add_argument("--learning_rate", type=float, help="学习率")
+    parser.add_argument("--batch_size", type=int, help="批大小")
+    parser.add_argument("--epochs", type=int, help="训练轮数")
+    parser.add_argument("--dropout", type=float, help="Dropout率")
+    parser.add_argument("--model_name", type=str, help="模型名称")
+    parser.add_argument("--optimizer_type", type=str, help="优化器类型")
+    parser.add_argument("--weight_decay", type=float, help="权重衰减")
+    parser.add_argument("--scheduler_type", type=str, help="调度器类型")
+    parser.add_argument("--loss", type=str, help="损失函数类型")
+    parser.add_argument("--experiment_name", type=str, help="实验名称")
+    
     return parser
 
 
-def parse_arguments(mode="train"):
+def parse_arguments(mode="grid_search"):
     """
-    统一的参数解析函数，处理命令行参数和配置文件
+    统一的参数解析函数，处理命令行参数和配置文件（统一网格搜索模式）
     
     Args:
-        mode (str, optional): 运行模式，'train'或'grid_search'，默认为'train'
+        mode (str, optional): 运行模式，现在统一为'grid_search'或'single_experiment'
         
     Returns:
         tuple: (args, config) 解析后的命令行参数和配置字典
     """
-    if mode == "train":
-        parser = create_base_parser("单次训练")
-        # 训练特定参数
-        parser.add_argument("--learning_rate", type=float, help="学习率")
-        parser.add_argument("--batch_size", type=int, help="批大小")
-        parser.add_argument("--epochs", type=int, help="训练轮数")
-        parser.add_argument("--dropout", type=float, help="Dropout率")
-        parser.add_argument("--model_name", type=str, help="模型名称")
-        parser.add_argument("--experiment_name", type=str, help="实验名称")
-        # parser.add_argument('--is_grid_search', action='store_true', help='仅用于训练脚本的逻辑分支（无需手动传）')
+    if mode == "single_experiment":
+        parser = create_base_parser("单个实验训练（网格搜索中的一个实验）")
     else:  # grid_search
-        parser = create_base_parser("网格搜索")
-        # 网格搜索特定参数
-        parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")
-        parser.add_argument("--save_results", action="store_true", default=True, help="保存结果")
-        parser.add_argument("--results_file", type=str, default="grid_search_results.csv", help="结果文件名")
+        parser = create_base_parser("网格搜索训练")
 
     args = parser.parse_args()
 
@@ -90,9 +96,15 @@ def parse_arguments(mode="train"):
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # 命令行参数覆盖配置（仅训练模式）
-    if mode == "train":
+    # 为单个实验应用参数覆盖（用于网格搜索中的单个实验）
+    if mode == "single_experiment":
+        # 创建临时的hyperparameters节点用于兼容性
+        if "hyperparameters" not in config:
+            config["hyperparameters"] = {}
+        
         hp = config["hyperparameters"]
+        
+        # 应用命令行参数覆盖
         if args.learning_rate is not None:
             hp["learning_rate"] = args.learning_rate
         if args.batch_size is not None:
@@ -101,8 +113,31 @@ def parse_arguments(mode="train"):
             hp["epochs"] = args.epochs
         if args.dropout is not None:
             hp["dropout"] = args.dropout
+            
+        # 应用模型和优化器配置
         if args.model_name is not None:
+            if "model" not in config:
+                config["model"] = {}
             config["model"]["name"] = args.model_name
+            config["model"]["type"] = args.model_name
+        if args.optimizer_type is not None:
+            if "optimizer" not in config:
+                config["optimizer"] = {"params": {}}
+            config["optimizer"]["type"] = args.optimizer_type
+        if args.weight_decay is not None:
+            if "optimizer" not in config:
+                config["optimizer"] = {"params": {}}
+            if "params" not in config["optimizer"]:
+                config["optimizer"]["params"] = {}
+            config["optimizer"]["params"]["weight_decay"] = args.weight_decay
+        if args.scheduler_type is not None:
+            if "scheduler" not in config:
+                config["scheduler"] = {}
+            config["scheduler"]["type"] = args.scheduler_type
+        if args.loss is not None:
+            if "loss" not in config:
+                config["loss"] = {}
+            config["loss"]["type"] = args.loss
         if args.experiment_name is not None:
             config["training"]["experiment_name"] = args.experiment_name
 

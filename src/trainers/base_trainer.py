@@ -55,7 +55,7 @@ def write_final_result(result_dir, result_data, accelerator):
         json.dump(result_data, f, ensure_ascii=False, indent=2)
 
 
-def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, is_grid_search=False):
+def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch): #, is_grid_search=False):
     """
     执行单个训练轮次
 
@@ -90,7 +90,7 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
             unit="batch",
             dynamic_ncols=True,
             leave=False,
-            disable=is_grid_search  # 在网格搜索模式下禁用进度条
+            # disable=is_grid_search  # 在网格搜索模式下禁用进度条
         )
 
     # 遍历训练数据的每个批次
@@ -137,7 +137,7 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     return avg_train_loss
 
 
-def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=False):
+def test_epoch(dataloader, model, loss_fn, accelerator, epoch): #, is_grid_search=False):
     """
     执行单个测试轮次
     
@@ -172,7 +172,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=Fa
             unit="batch",
             dynamic_ncols=True,
             leave=False,
-            disable=is_grid_search  # 在网格搜索模式下禁用进度条
+            # disable=is_grid_search  # 在网格搜索模式下禁用进度条
         )
 
     # 禁用梯度计算以节省内存和加速推理
@@ -223,7 +223,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, is_grid_search=Fa
     return None, None
 
 
-def run_training(config, experiment_name=None, is_grid_search=False):
+def run_training(config, experiment_name=None): #, is_grid_search=False):
     """
     训练的主入口函数，负责整个训练过程的协调，包括：
     - 环境初始化（随机种子、实验追踪）
@@ -363,8 +363,8 @@ def run_training(config, experiment_name=None, is_grid_search=False):
             tqdm.write(f"\nEpoch {epoch}/{hyperparams['epochs']}")
 
         # 执行一轮训练和测试
-        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, is_grid_search)
-        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, is_grid_search)
+        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch) #, is_grid_search)
+        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch) #, is_grid_search)
 
         # 更新并记录最佳准确率
         if accelerator.is_main_process and val_accuracy and val_accuracy > best_accuracy:

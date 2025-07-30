@@ -15,12 +15,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils.config_parser import parse_arguments  # 参数解析器
 from src.trainers.base_trainer import run_training   # 核心训练函数
 
-def is_accelerate_environment():
-    """检测是否已在accelerate环境中"""
-    return os.environ.get('ACCELERATE_USE_DEEPSPEED') is not None or \
-           os.environ.get('LOCAL_RANK') is not None or \
-           os.environ.get('WORLD_SIZE') is not None
-
 def launch_with_accelerate():
     """使用accelerate launch重新启动当前脚本"""
     # 获取当前脚本的所有参数，但移除--multi_gpu
@@ -51,16 +45,16 @@ def main():
     args, config = parse_arguments(mode='train')
     
     # 检查是否需要启动多卡训练
-    if args.multi_gpu and not is_accelerate_environment():
-        # 如果指定了多卡训练但不在accelerate环境中，重新启动
-        return launch_with_accelerate()
+    # 如果指定了多卡，并且环境中没有 'LOCAL_RANK'，则重新启动
+    # if args.multi_gpu and 'LOCAL_RANK' not in os.environ:
+    #     return launch_with_accelerate()
     
     # 打印训练信息
     print_training_info(args, config)
     
     # 获取实验名称并启动训练
     experiment_name = config['training']['experiment_name']
-    result = run_training(config, experiment_name, args.is_grid_search)
+    result = run_training(config, experiment_name) # , args.is_grid_search)
     
     return 0
 

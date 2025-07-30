@@ -76,7 +76,7 @@ def parse_arguments(mode="train"):
         parser.add_argument("--dropout", type=float, help="Dropout率")
         parser.add_argument("--model_name", type=str, help="模型名称")
         parser.add_argument("--experiment_name", type=str, help="实验名称")
-        parser.add_argument('--is_grid_search', action='store_true', help='仅用于训练脚本的逻辑分支（无需手动传）')
+        # parser.add_argument('--is_grid_search', action='store_true', help='仅用于训练脚本的逻辑分支（无需手动传）')
     else:  # grid_search
         parser = create_base_parser("网格搜索")
         # 网格搜索特定参数

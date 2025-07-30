@@ -27,14 +27,7 @@ from src.utils.config_parser import parse_arguments
 def load_grid_config(path="config/grid.yaml"):
     """加载网格搜索配置"""
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def _as_list(v):
-    """把标量包装成单元素列表；列表则原样返回；None 则返回空列表"""
-    if v is None:
-        return []
-    return v if isinstance(v, (list, tuple)) else [v]
+        return yaml.safe_load(f)
 
 
 def _as_list(v):
@@ -53,33 +46,20 @@ def generate_combinations(config):
     fixed = gs.get("fixed", {}) or {}
     grid = gs.get("grid", {}) or {}
 
-    # 若未提供 grid，则仅返回 fixed（或空字典）作为单一组合
     if not grid:
         return [fixed] if fixed else [{}]
 
-    keys = list(grid.keys())
-    values_lists = [_as_list(grid[k]) for k in keys]
-
     # 过滤空列表的键，避免生成空组合
-    keep = [(k, vs) for k, vs in zip(keys, values_lists) if len(vs) > 0]
-    if len(keep) != len(keys):
-        print("警告: grid 中存在空列表，已跳过对应键。")
-
-    if not keep:
-        # 所有键的取值都为空，退化为仅 fixed（或空字典）
+    valid_items = [(k, _as_list(v)) for k, v in grid.items() if _as_list(v)]
+    
+    if not valid_items:
         return [fixed] if fixed else [{}]
 
-    keys, values_lists = zip(*keep)
-    keys, values_lists = list(keys), list(values_lists)
+    keys, values_lists = zip(*valid_items)
 
     # 笛卡尔积生成组合，并合并 fixed
-    combos = []
-    for combo in itertools.product(*values_lists):
-        params = dict(zip(keys, combo))
-        params = {**fixed, **params}
-        combos.append(params)
-
-    return combos
+    return [{**fixed, **dict(zip(keys, combo))} 
+            for combo in itertools.product(*values_lists)]
 
 
 def parse_result_from_files(exp_name):
@@ -88,42 +68,36 @@ def parse_result_from_files(exp_name):
     final_json = os.path.join(result_dir, "result.json")
     metrics_path = os.path.join(result_dir, "metrics.jsonl")
 
-    best_accuracy = 0.0
-    final_accuracy = 0.0
-
     # 优先读取 result.json
-    if os.path.exists(final_json):
-        try:
+    try:
+        if os.path.exists(final_json):
             with open(final_json, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
                 best_accuracy = float(data.get("best_accuracy", 0.0))
                 final_accuracy = float(data.get("final_accuracy", best_accuracy))
                 return best_accuracy, final_accuracy
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-    # 回退：扫描 metrics.jsonl，取最大 val_acc 作为 best，最后一条 val_acc 作为 final
-    if os.path.exists(metrics_path):
-        try:
-            last_val = None
-            best_val = 0.0
+    # 回退：扫描 metrics.jsonl
+    try:
+        if os.path.exists(metrics_path):
+            last_val, best_val = None, 0.0
             with open(metrics_path, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
-                        rec = json.loads(line)
-                        va = rec.get("val_acc")
+                        va = json.loads(line).get("val_acc")
                         if isinstance(va, (int, float)):
                             last_val = float(va)
-                            if last_val > best_val:
-                                best_val = last_val
+                            best_val = max(best_val, last_val)
                     except Exception:
                         continue
             if last_val is not None:
                 return best_val, last_val
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-    return best_accuracy, final_accuracy
+    return 0.0, 0.0
 
 
 def save_results_to_csv(results, filename):
@@ -178,10 +152,10 @@ def _unique_master_port(base=20000, span=10000):
     return str(base + random.randint(0, span))
 
 
-def _infer_num_procs(gpu_ids: str | None) -> int:
+def _infer_num_procs() -> int:
     """根据 gpu_ids 或实际设备数推断进程数"""
-    if gpu_ids:
-        return max(1, len([x for x in gpu_ids.split(",") if x.strip() != ""]))
+    # if gpu_ids:
+    #     return max(1, len([x for x in gpu_ids.split(",") if x.strip() != ""]))
     env_ids = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
     if env_ids:
         return max(1, len([x for x in env_ids.split(",") if x.strip() != ""]))
@@ -195,36 +169,21 @@ def _infer_num_procs(gpu_ids: str | None) -> int:
 # ----------------------------- 核心逻辑 -----------------------------
 
 def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml",
-                          gpu_ids=None, accelerate_args=""):
+                        accelerate_args=""):
     """运行单个实验（每个实验独立的进程/进程组）"""
     exp_name = f"grid_{exp_id}"
 
-    # 组装命令
+    # 组装基础命令
     if use_multi_gpu:
-        num_procs = _infer_num_procs(gpu_ids)
-        cmd = [
-            "accelerate", "launch",
-            "--multi_gpu",
-            "--num_processes", str(num_procs),
-        ]
-        if gpu_ids:
-            cmd += ["--gpu_ids", gpu_ids]
-        # 透传用户额外的 accelerate 参数
+        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(_infer_num_procs())]
         if accelerate_args:
-            cmd += accelerate_args.split()
-        cmd += [
-            "scripts/train.py",
-            "--config", config_path,
-            "--experiment_name", exp_name,
-        ]
+            cmd.extend(accelerate_args.split())
     else:
-        cmd = [
-            sys.executable, "-u",
-            "scripts/train.py",
-            "--config", config_path,
-            "--experiment_name", exp_name,
-        ]
-
+        cmd = [sys.executable, "-u"]
+    
+    # 添加训练脚本和基础参数
+    cmd.extend(["scripts/train.py", "--config", config_path, "--experiment_name", exp_name])
+    
     # 添加参数覆盖
     for k, v in (params or {}).items():
         cmd.extend([f"--{k}", str(v)])
@@ -287,7 +246,7 @@ def run_grid_search(args):
             params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
             config_path="config/grid.yaml",     # 训练使用的统一配置
-            gpu_ids=args.gpu_ids,
+            # gpu_ids=args.gpu_ids,
             accelerate_args=(args.accelerate_args or "")
         )
         results.append(result)
@@ -310,9 +269,7 @@ def run_grid_search(args):
         print(f"   实验名称: {best_result['exp_name']}")
         print(f"   最佳准确率: {best_result['best_accuracy']:.2f}%")
         print(f"   最终准确率: {best_result['final_accuracy']:.2f}%")
-        print(f"   最优参数:")
-        for key, value in best_result["params"].items():
-            print(f"     {key}: {value}")
+        print(f"   最优参数: {best_result['params']}")
 
         top_results = sorted(successful_results, key=lambda x: x["best_accuracy"], reverse=True)[:3]
         print(f"\n📊 前3名实验结果:")

@@ -37,7 +37,7 @@ multi_gpu:
 # 超参数配置
 hyperparameters:
   learning_rate: 0.001
-  batch_size: 256  # 视频数据通常需要更小的batch size
+  batch_size: 256  # 384
   epochs: 2
   weight_decay: 0.0001
   dropout: 0.2

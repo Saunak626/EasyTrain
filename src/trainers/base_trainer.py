@@ -136,7 +136,7 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     return avg_train_loss
 
 
-def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
+def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=None):
     """
     执行单个测试轮次
     
@@ -210,7 +210,10 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch):
         accuracy = 100. * total_correct.item() / total_samples.item()
 
         # 使用tqdm.write()输出摘要，不破坏进度条显示
-        tqdm.write(f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%')
+        log_msg = f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%'
+        if train_batches is not None:
+            log_msg += f' | train_batches={train_batches}'
+        tqdm.write(log_msg)
 
         # 记录测试指标到实验追踪系统
         accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
@@ -383,7 +386,7 @@ def run_training(config, experiment_name=None):
         # 执行一轮训练和测试
         train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
         
-        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch)
+        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
 
         # 更新并记录最佳准确率
         if accelerator.is_main_process and val_accuracy and val_accuracy > best_accuracy:

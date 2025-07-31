@@ -47,11 +47,19 @@ def create_base_parser(description):
     parser.add_argument("--epochs", type=int, help="训练轮数")
     parser.add_argument("--dropout", type=float, help="Dropout率")
     parser.add_argument("--model_name", type=str, help="模型名称")
+    parser.add_argument("--model.type", type=str, help="模型类型")
     
     parser.add_argument("--optimizer_type", type=str, help="优化器类型")
+    parser.add_argument("--optimizer.name", type=str, help="优化器名称")
+    parser.add_argument("--optimizer.params.weight_decay", type=float, help="权重衰减")
     parser.add_argument("--weight_decay", type=float, help="权重衰减")
     parser.add_argument("--scheduler_type", type=str, help="调度器类型")
+    parser.add_argument("--scheduler.name", type=str, help="调度器名称")
     parser.add_argument("--loss", type=str, help="损失函数类型")
+    parser.add_argument("--loss.name", type=str, help="损失函数名称")
+    parser.add_argument("--hyperparameters.learning_rate", type=float, help="学习率")
+    parser.add_argument("--hyperparameters.batch_size", type=int, help="批大小")
+    parser.add_argument("--hyperparameters.epochs", type=int, help="训练轮数")
     parser.add_argument("--experiment_name", type=str, help="实验名称")
     
     return parser
@@ -77,6 +85,22 @@ def parse_arguments(mode="grid_search"):
     # 加载配置文件
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
+
+    # 处理嵌套参数覆盖
+    def set_nested_value(config_dict, key_path, value):
+        """设置嵌套字典的值，支持点号分隔的路径"""
+        keys = key_path.split('.')
+        current = config_dict
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
+
+    # 应用所有命令行参数覆盖（包括嵌套参数）
+    for arg_name, arg_value in vars(args).items():
+        if arg_value is not None and '.' in arg_name:
+            set_nested_value(config, arg_name, arg_value)
 
     # 为单个实验应用参数覆盖（用于网格搜索中的单个实验）
     if mode == "single_experiment":

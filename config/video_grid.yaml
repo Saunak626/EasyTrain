@@ -19,7 +19,7 @@ data:
   annotation_path: "./data/ucfTrainTestlist"
   download: false
   augment: true
-  num_workers: 8
+  num_workers: 12
   fold: 1
 
 # GPU配置
@@ -43,13 +43,13 @@ results_file: "video_grid_search_results.csv"
 grid_search:
   grid:
     # 模型相关参数
-    model_name: ["r3d_18", "mc3_18", "r2plus1d_18"]
+    model_name: ["mc3_18", "r3d_18", "r2plus1d_18"]
     
     # 超参数
     learning_rate: [0.001]
-    batch_size: [256]
+    batch_size: [384] # 256
     dropout: [0.01]
-    epochs: [2]
+    epochs: [10]
     
     # 视频相关参数
     # frames_per_clip: [8]

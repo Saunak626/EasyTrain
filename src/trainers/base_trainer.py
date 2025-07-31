@@ -23,7 +23,8 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 导入项目内部模块
-from src.models.image_net import get_model                     # 模型工厂函数
+from src.models.image_net import get_model                     # 图像模型工厂函数
+from src.models.video_net import get_video_model               # 视频模型工厂函数
 from src.losses.image_loss import get_loss_function            # 损失函数工厂函数
 from src.optimizers.optim import get_optimizer                 # 优化器工厂函数
 from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
@@ -279,14 +280,28 @@ def run_training(config, experiment_name=None):
 
     # 解析模型配置
     model_config = config.get('model', {})
-    model_name = model_config.get('name', 'resnet18')
+    model_name = model_config.get('type', model_config.get('name', 'resnet18'))
 
-    # 使用简化的模型创建函数
-    model = get_model(
-        model_name=model_name,
-        num_classes=dataset_info['num_classes'],
-        **model_config.get('params', {})
-    )
+    # 根据模型类型选择对应的工厂函数
+    video_model_prefixes = ['r3d_', 'mc3_', 'r2plus1d_', 's3d']
+    is_video_model = any(model_name.startswith(prefix) for prefix in video_model_prefixes)
+    
+    if is_video_model:
+        # 使用视频模型工厂函数
+        video_params = model_config.get('params', {}).copy()
+        # 确保使用数据集的实际类别数
+        video_params['num_classes'] = dataset_info['num_classes']
+        model = get_video_model(
+            model_name=model_name,
+            **video_params
+        )
+    else:
+        # 使用图像模型工厂函数
+        model = get_model(
+            model_name=model_name,
+            num_classes=dataset_info['num_classes'],
+            **model_config.get('params', {})
+        )
 
     # 创建损失函数
     loss_config = config.get('loss', {})

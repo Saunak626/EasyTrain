@@ -3,6 +3,7 @@
 该模块提供了统一的数据集加载接口，支持多种数据集类型：
 - CIFAR-10: 内置支持，自动下载和数据增强
 - 自定义数据集: 支持目录结构和CSV标注文件
+- UCF-101: 视频动作识别数据集，支持多种视频模型
 
 主要功能：
 1. 提供标准化的数据加载接口
@@ -21,6 +22,7 @@
 
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
+from .ucf101_dataset import UCF101Dataset
 from .dataloader_factory import create_dataloaders, get_dataset_info
 
-__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'create_dataloaders', 'get_dataset_info']
+__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'UCF101Dataset', 'create_dataloaders', 'get_dataset_info']

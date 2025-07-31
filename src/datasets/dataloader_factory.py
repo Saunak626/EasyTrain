@@ -7,6 +7,7 @@ import os
 from torch.utils.data import DataLoader
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
+from .ucf101_dataset import UCF101Dataset
 
 
 def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwargs):
@@ -14,7 +15,7 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
     统一的数据加载器创建函数
     
     Args:
-        dataset_name (str): 数据集名称，支持'cifar10'或'custom'
+        dataset_name (str): 数据集名称，支持'cifar10'、'custom'或'ucf101'
         data_dir (str): 数据存储根目录路径
         batch_size (int): 批大小
         num_workers (int, optional): 数据加载的工作进程数，默认为4
@@ -52,8 +53,35 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
         train_dataset, test_dataset = custom_dataset.get_datasets()
         num_classes = custom_dataset.num_classes
 
+    elif dataset_name == "ucf101":
+        # 创建UCF-101视频数据集
+        annotation_path = kwargs.get('annotation_path', os.path.join(data_dir, 'ucfTrainTestlist'))
+        frames_per_clip = kwargs.get('frames_per_clip', 16)
+        step_between_clips = kwargs.get('step_between_clips', 4)
+        fold = kwargs.get('fold', 1)
+        
+        train_dataset = UCF101Dataset(
+            root=data_dir,
+            annotation_path=annotation_path,
+            frames_per_clip=frames_per_clip,
+            step_between_clips=step_between_clips,
+            fold=fold,
+            train=True
+        )
+        
+        test_dataset = UCF101Dataset(
+            root=data_dir,
+            annotation_path=annotation_path,
+            frames_per_clip=frames_per_clip,
+            step_between_clips=step_between_clips,
+            fold=fold,
+            train=False
+        )
+        
+        num_classes = train_dataset.num_classes
+
     else:
-        raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom")
+        raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom, ucf101")
 
     # 创建数据加载器
     train_loader = DataLoader(
@@ -80,7 +108,7 @@ def get_dataset_info(dataset_name):
     获取数据集基本信息
     
     Args:
-        dataset_name (str): 数据集名称，支持'cifar10'或'custom'
+        dataset_name (str): 数据集名称，支持'cifar10'、'custom'或'ucf101'
         
     Returns:
         dict: 包含数据集名称、类别数、输入尺寸和类别列表的字典
@@ -103,6 +131,13 @@ def get_dataset_info(dataset_name):
             "name": "Custom Dataset",
             "num_classes": None,  # 需要运行时确定
             "input_size": (3, 224, 224),  # 默认大小
+            "classes": None  # 需要运行时确定
+        }
+    elif dataset_name == "ucf101":
+        return {
+            "name": "UCF-101",
+            "num_classes": 101,
+            "input_size": (3, 16, 112, 112),  # (C, T, H, W)
             "classes": None  # 需要运行时确定
         }
     else:

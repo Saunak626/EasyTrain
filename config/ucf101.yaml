@@ -1,0 +1,74 @@
+# UCF-101 视频分类配置
+# 仅作单次训练或网格搜索基准
+
+training:
+  experiment_name: "ucf101_exp"
+  save_model: true
+  model_save_path: "models/video_model.pth"
+
+swanlab:
+  project_name: "training_framework"
+  description: "UCF-101 视频分类实验"
+
+# 数据配置
+data:
+  type: "ucf101"
+  root: "./data/UCF-101"
+  annotation_path: "./data/ucfTrainTestlist"
+  download: false          # Assume dataset already prepared
+  frames_per_clip: 16
+  step_between_clips: 4
+  fold: 1
+  num_workers: 4
+
+# GPU 配置
+gpu:
+  device_ids: "0,1"
+  auto_select: true
+
+# 多 GPU
+multi_gpu:
+  enabled: true
+  strategy: "ddp"
+
+# 超参数（单实验用）
+hyperparameters:
+  learning_rate: 0.0005
+  batch_size: 8
+  epochs: 10
+  dropout: 0.2
+
+# 模型
+model:
+  name: "r3d_18"
+  params:
+    pretrained: true
+
+# 损失
+loss:
+  name: "crossentropy"
+  params: {}
+
+# 优化器
+optimizer:
+  name: "adamw"
+  params:
+    weight_decay: 0.0001
+
+# 学习率调度器
+scheduler:
+  name: "onecycle"
+  params: {}
+
+# 网格搜索 (可选)
+grid_search:
+  grid:
+    model_name: ["r3d_18", "mc3_18"]
+    learning_rate: [0.0005, 0.001]
+    batch_size: [4, 8]
+    epochs: [8]
+    frames_per_clip: [16]
+    scheduler_type: ["onecycle"]
+max_experiments: 10
+save_results: true
+results_file: "ucf101_grid_results.csv"

@@ -1,0 +1,57 @@
+# UCF-101视频分类网格搜索配置
+# 用于搜索最佳的视频模型和超参数组合
+
+# 基础配置继承
+base_config: "config/video.yaml"
+
+# 网格搜索参数
+grid_search:
+  # 模型类型搜索
+  model.type:
+    - "r3d_18"
+    - "mc3_18"
+    - "r2plus1d_18"
+  
+  # 学习率搜索
+  hyperparameters.learning_rate:
+    - 0.0001
+    - 0.001
+    - 0.01
+  
+  # 批大小搜索
+  hyperparameters.batch_size:
+    - 4
+    - 8
+    - 16
+  
+  # 视频帧数搜索
+  data.frames_per_clip:
+    - 8
+    - 16
+    - 32
+  
+  # 优化器类型搜索
+  optimizer.type:
+    - "adam"
+    - "adamw"
+    - "sgd"
+  
+  # 学习率调度器搜索
+  scheduler.type:
+    - "step"
+    - "cosine"
+    - "onecycle"
+
+# 实验配置
+experiment:
+  max_experiments: 20  # 最大实验数量限制
+  random_search: false  # 是否使用随机搜索
+  early_stopping:
+    patience: 3
+    min_delta: 0.001
+  
+# 结果保存
+results:
+  save_dir: "./results/video_grid_search"
+  save_best_model: true
+  save_logs: true

@@ -31,14 +31,17 @@ class VideoNetModel(nn.Module):
         
     def _create_backbone(self):
         """创建视频模型骨干网络"""
+        # 使用新的weights参数替代deprecated的pretrained参数
+        weights = 'DEFAULT' if self.pretrained else None
+        
         if self.model_name == 'r3d_18':
-            model = models.video.r3d_18(pretrained=self.pretrained)
+            model = models.video.r3d_18(weights=weights)
         elif self.model_name == 'mc3_18':
-            model = models.video.mc3_18(pretrained=self.pretrained)
+            model = models.video.mc3_18(weights=weights)
         elif self.model_name == 'r2plus1d_18':
-            model = models.video.r2plus1d_18(pretrained=self.pretrained)
+            model = models.video.r2plus1d_18(weights=weights)
         elif self.model_name == 's3d':
-            model = models.video.s3d(pretrained=self.pretrained)
+            model = models.video.s3d(weights=weights)
         else:
             raise ValueError(f"不支持的视频模型: {self.model_name}")
         

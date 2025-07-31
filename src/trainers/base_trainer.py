@@ -321,13 +321,21 @@ def run_training(config, experiment_name=None):
 
     # 创建学习率调度器
     scheduler_config = config.get('scheduler', {})
+    scheduler_name = scheduler_config.get('name', 'onecycle')
+    scheduler_params = scheduler_config.get('params', {})
+    
+    # 根据调度器类型设置默认参数
+    if scheduler_name == 'onecycle':
+        scheduler_params.setdefault('max_lr', 5 * hyperparams['learning_rate'])
+        scheduler_params.setdefault('epochs', hyperparams['epochs'])
+        scheduler_params.setdefault('steps_per_epoch', len(train_dataloader))
+    elif scheduler_name == 'cosine':
+        scheduler_params.setdefault('T_max', hyperparams['epochs'])
+    
     lr_scheduler = get_scheduler(
         optimizer,
-        scheduler_config.get('name', 'onecycle'),
-        max_lr=5 * hyperparams['learning_rate'],
-        epochs=hyperparams['epochs'],
-        steps_per_epoch=len(train_dataloader),
-        **scheduler_config.get('params', {})
+        scheduler_name,
+        **scheduler_params
     )
 
     # 使用Accelerator包装所有训练组件，自动处理多GPU分布式训练

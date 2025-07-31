@@ -1,31 +1,16 @@
 # UCF-101视频分类配置文件
-# 基于base.yaml的视频分类任务配置
-
-# 超参数配置
-hyperparameters:
-  learning_rate: 0.001
-  batch_size: 128  # 视频数据通常需要更小的batch size
-  epochs: 2
-  weight_decay: 0.0001
+# 基于grid.yaml的视频分类任务配置
 
 # 训练配置
 training:
+  experiment_name: "ucf101_baseline"
   save_model: true
-  save_interval: 2
-  log_interval: 10
-  early_stopping:
-    patience: 5
-    min_delta: 0.001
+  model_save_path: "models/video_model.pth"
 
 # SwanLab配置
 swanlab:
   project_name: "EasyTrain-Video"
-  experiment_name: "ucf101_baseline"
   description: "UCF-101视频分类基线实验"
-  tags: ["video", "ucf101", "action_recognition"]
-  config:
-    framework: "pytorch"
-    task: "video_classification"
 
 # 数据配置
 data:
@@ -35,31 +20,44 @@ data:
   frames_per_clip: 16
   step_between_clips: 4
   fold: 1
-  num_workers: 4
-  pin_memory: true
+  download: false
+  augment: true
+  num_workers: 8
 
 # GPU配置
 gpu:
-  use_multi_gpu: true
   device_ids: "2,3"
-  mixed_precision: true
+  auto_select: true
+
+# 多卡训练配置
+multi_gpu:
+  enabled: true
+  strategy: "ddp"
+
+# 超参数配置
+hyperparameters:
+  learning_rate: 0.001
+  batch_size: 256  # 视频数据通常需要更小的batch size
+  epochs: 2
+  weight_decay: 0.0001
+  dropout: 0.2
 
 # 模型配置
 model:
-  type: "r3d_18"
+  name: "r3d_18"
   params:
     pretrained: true
     num_classes: 101
 
 # 损失函数配置
 loss:
-  type: "cross_entropy"
+  name: "crossentropy"
   params:
     label_smoothing: 0.1
 
 # 优化器配置
 optimizer:
-  type: "adamw"
+  name: "adamw"
   params:
     weight_decay: 0.0001
     betas: [0.9, 0.999]
@@ -67,7 +65,7 @@ optimizer:
 
 # 学习率调度器配置
 scheduler:
-  type: "cosine"
+  name: "cosine"
   params:
     T_max: 10
-    eta_min: 1e-6
+    eta_min: 0.000001

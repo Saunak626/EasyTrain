@@ -1,57 +1,65 @@
 # UCF-101视频分类网格搜索配置
 # 用于搜索最佳的视频模型和超参数组合
 
-# 基础配置继承
-base_config: "config/video.yaml"
+# 训练配置
+training:
+  experiment_name: "ucf101_grid_exp"
+  save_model: true
+  model_save_path: "models/video_model.pth"
 
-# 网格搜索参数
+# SwanLab配置
+swanlab:
+  project_name: "EasyTrain-Video-Grid"
+  description: "UCF-101视频分类网格搜索实验"
+
+# 数据配置
+data:
+  type: "ucf101"
+  root: "./data/UCF-101"
+  annotation_path: "./data/ucfTrainTestlist"
+  download: false
+  augment: true
+  num_workers: 8
+  fold: 1
+
+# GPU配置
+gpu:
+  device_ids: "2,3"
+  auto_select: true
+
+# 多卡训练配置
+multi_gpu:
+  enabled: true
+  strategy: "ddp"
+
+# 网格搜索设置
+max_experiments: 20
+continue_on_error: true
+parallel_jobs: 1
+save_results: true
+results_file: "video_grid_search_results.csv"
+
+# 网格搜索超参数
 grid_search:
-  # 模型类型搜索
-  model.type:
-    - "r3d_18"
-    - "mc3_18"
-    - "r2plus1d_18"
-  
-  # 学习率搜索
-  hyperparameters.learning_rate:
-    - 0.0001
-    - 0.001
-    - 0.01
-  
-  # 批大小搜索
-  hyperparameters.batch_size:
-    - 4
-    - 8
-    - 16
-  
-  # 视频帧数搜索
-  data.frames_per_clip:
-    - 8
-    - 16
-    - 32
-  
-  # 优化器类型搜索
-  optimizer.type:
-    - "adam"
-    - "adamw"
-    - "sgd"
-  
-  # 学习率调度器搜索
-  scheduler.type:
-    - "step"
-    - "cosine"
-    - "onecycle"
+  grid:
+    # 模型相关参数
+    model_name: ["r3d_18", "mc3_18", "r2plus1d_18"]
+    
+    # 超参数
+    learning_rate: [0.001]
+    batch_size: [256]
+    dropout: [0.01]
+    epochs: [2]
+    
+    # 视频相关参数
+    # frames_per_clip: [8]
+    
+    # 损失函数
+    loss: ["crossentropy"]
 
-# 实验配置
-experiment:
-  max_experiments: 20  # 最大实验数量限制
-  random_search: false  # 是否使用随机搜索
-  early_stopping:
-    patience: 3
-    min_delta: 0.001
-  
-# 结果保存
-results:
-  save_dir: "./results/video_grid_search"
-  save_best_model: true
-  save_logs: true
+    # 优化器参数
+    optimizer_type: ["adam"]
+    weight_decay: [0.0001]
+    
+    # 调度器参数
+    scheduler_type: ["step", "cosine", "onecycle"]

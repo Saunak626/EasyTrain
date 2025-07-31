@@ -70,12 +70,12 @@ results_file: "video_grid_search_results.csv"
 grid_search:
   grid:
     # 模型相关参数（主要搜索内容）
-    model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
+    model.type: ["r3d_18", "mc3_18","r2plus1d_18"]
     
     # 超参数
     hyperparameters.learning_rate: [0.001]
-    hyperparameters.batch_size: [256]
-    hyperparameters.epochs: [3]
+    hyperparameters.batch_size: [128]
+    hyperparameters.epochs: [5]
     
     # 优化器参数
     optimizer.name: ["adam"]

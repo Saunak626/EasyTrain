@@ -13,7 +13,7 @@ import time
 import csv
 import json
 import random
-import torch 
+import torch
 
 from datetime import datetime
 
@@ -189,7 +189,17 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
 
     # 直接继承 TTY，保留 tqdm 一行刷新
     process = subprocess.Popen(cmd, env=env)
-    rc = process.wait()
+    try:
+        # 等待子进程结束
+        rc = process.wait()
+    except KeyboardInterrupt:
+        # 捕获到 Ctrl+C (KeyboardInterrupt)
+        print(f"\n捕获到中断信号(Ctrl+C)，正在终止子进程 {process.pid}...")
+        process.terminate()  # 发送 SIGTERM 信号，请求子进程终止
+        process.wait()       # 等待子进程完全退出
+        print("子进程已终止。")
+        raise                # 重新抛出异常，以确保整个网格搜索脚本停止
+
     success = (rc == 0)
 
     # 从文件解析结果
@@ -234,7 +244,7 @@ def run_grid_search(args):
         result = run_single_experiment(
             params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
-            config_path=args.config,#"config/grid.yaml",     # 训练使用的统一配置
+            config_path=args.config,#"config/grid.yaml",   # 训练使用的统一配置
         )
         results.append(result)
         if result["success"]:

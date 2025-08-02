@@ -40,6 +40,7 @@ def create_base_parser(description):
     parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")
     parser.add_argument("--save_results", action="store_true", default=True, help="保存结果")
     parser.add_argument("--results_file", type=str, default="grid_search_results.csv", help="结果文件名")
+    parser.add_argument("--top_n", type=int, default=3, help="显示前n名实验结果")
     
     # 单个实验参数覆盖（用于网格搜索中的单个实验）
     parser.add_argument("--learning_rate", type=float, help="学习率")

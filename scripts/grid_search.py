@@ -36,9 +36,10 @@ def _as_list(v):
 
 def generate_combinations(config):
     """
-    只支持笛卡尔积：
+    支持笛卡尔积和batch_size数组模式：
     - grid_search.grid: dict[str, list|scalar]，标量会当作单元素列表
     - grid_search.fixed: dict，固定参数并入每个组合
+    - 特殊处理：当batch_size数组长度与model.type数组长度相同时，按对应顺序配对
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
@@ -47,6 +48,42 @@ def generate_combinations(config):
     if not grid:
         return [fixed] if fixed else [{}]
 
+    # 检查batch_size数组模式
+    model_types = _as_list(grid.get("model.type", []))
+    batch_sizes = _as_list(grid.get("hyperparameters.batch_size", []))
+    
+    # 如果batch_size数组长度与model.type数组长度相同，使用配对模式
+    if (len(model_types) > 1 and len(batch_sizes) > 1 and 
+        len(model_types) == len(batch_sizes)):
+        
+        # 创建model.type和batch_size的配对组合
+        model_batch_pairs = list(zip(model_types, batch_sizes))
+        
+        # 处理其他参数
+        other_grid = {k: v for k, v in grid.items() 
+                     if k not in ["model.type", "hyperparameters.batch_size"]}
+        
+        if not other_grid:
+            # 只有model.type和batch_size，直接返回配对组合
+            return [{**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+                   for model_type, batch_size in model_batch_pairs]
+        else:
+            # 有其他参数，需要与配对组合做笛卡尔积
+            other_valid_items = [(k, _as_list(v)) for k, v in other_grid.items() if _as_list(v)]
+            if other_valid_items:
+                other_keys, other_values_lists = zip(*other_valid_items)
+                combinations = []
+                for model_type, batch_size in model_batch_pairs:
+                    for other_combo in itertools.product(*other_values_lists):
+                        combo = {**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+                        combo.update(dict(zip(other_keys, other_combo)))
+                        combinations.append(combo)
+                return combinations
+            else:
+                return [{**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+                       for model_type, batch_size in model_batch_pairs]
+    
+    # 标准笛卡尔积模式
     # 过滤空列表的键，避免生成空组合
     valid_items = [(k, _as_list(v)) for k, v in grid.items() if _as_list(v)]
     
@@ -268,8 +305,8 @@ def run_grid_search(args):
         print(f"   最终准确率: {best_result['final_accuracy']:.2f}%")
         print(f"   最优参数: {best_result['params']}")
 
-        top_results = sorted(successful_results, key=lambda x: x["best_accuracy"], reverse=True)[:3]
-        print(f"\n📊 前3名实验结果:")
+        top_results = sorted(successful_results, key=lambda x: x["best_accuracy"], reverse=True)[:args.top_n]
+        print(f"\n📊 前{args.top_n}名实验结果:")
         for i, r in enumerate(top_results, 1):
             print(f"   {i}. {r['exp_name']} - {r['best_accuracy']:.2f}% - {r['params']}")
 

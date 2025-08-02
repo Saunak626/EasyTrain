@@ -14,7 +14,7 @@ class VideoNetModel(nn.Module):
         初始化视频分类模型
         
         Args:
-            model_name: 模型名称 ('r3d_18', 'mc3_18', 'r2plus1d_18', 's3d')
+            model_name: 模型名称 ('r3d_18', 'mc3_18', 'r2plus1d_18', 's3d', 'mvit_v1_b', 'mvit_v2_s', 'swin3d_b', 'swin3d_s', 'swin3d_t')
             num_classes: 分类类别数
             pretrained: 是否使用预训练权重
         """
@@ -42,6 +42,16 @@ class VideoNetModel(nn.Module):
             model = models.video.r2plus1d_18(weights=weights)
         elif self.model_name == 's3d':
             model = models.video.s3d(weights=weights)
+        elif self.model_name == 'mvit_v1_b':
+            model = models.video.mvit_v1_b(weights=weights)
+        elif self.model_name == 'mvit_v2_s':
+            model = models.video.mvit_v2_s(weights=weights)
+        elif self.model_name == 'swin3d_b':
+            model = models.video.swin3d_b(weights=weights)
+        elif self.model_name == 'swin3d_s':
+            model = models.video.swin3d_s(weights=weights)
+        elif self.model_name == 'swin3d_t':
+            model = models.video.swin3d_t(weights=weights)
         else:
             raise ValueError(f"不支持的视频模型: {self.model_name}")
         
@@ -49,18 +59,26 @@ class VideoNetModel(nn.Module):
     
     def _modify_classifier(self):
         """修改分类器以适应目标类别数"""
-        if hasattr(self.backbone, 'fc'):
-            # 对于r3d_18, mc3_18, r2plus1d_18
+        if self.model_name in ['r3d_18', 'mc3_18', 'r2plus1d_18']:
+            # 对于ResNet3D系列模型，修改fc层
             in_features = self.backbone.fc.in_features
             self.backbone.fc = nn.Linear(in_features, self.num_classes)
-        elif hasattr(self.backbone, 'classifier'):
-            # 对于s3d
-            if isinstance(self.backbone.classifier, nn.Sequential):
-                in_features = self.backbone.classifier[-1].in_features
-                self.backbone.classifier[-1] = nn.Linear(in_features, self.num_classes)
-            else:
-                in_features = self.backbone.classifier.in_features
-                self.backbone.classifier = nn.Linear(in_features, self.num_classes)
+        elif self.model_name == 's3d':
+            # 对于S3D模型，修改classifier的最后一层（Conv3d）
+            # S3D的classifier[-1]是Conv3d(1024, 400, kernel_size=(1, 1, 1))
+            in_channels = self.backbone.classifier[-1].in_channels
+            self.backbone.classifier[-1] = nn.Conv3d(in_channels, self.num_classes, kernel_size=(1, 1, 1))
+        elif self.model_name.startswith('mvit'):
+            # 对于MViT系列模型，修改head的最后一层
+            # MViT的head是Sequential，最后一层是Linear
+            in_features = self.backbone.head[-1].in_features
+            self.backbone.head[-1] = nn.Linear(in_features, self.num_classes)
+        elif self.model_name.startswith('swin3d'):
+            # 对于Swin3D系列模型，直接替换head（Linear层）
+            in_features = self.backbone.head.in_features
+            self.backbone.head = nn.Linear(in_features, self.num_classes)
+        else:
+            raise ValueError(f"Unsupported model: {self.model_name}")
     
     def forward(self, x):
         """前向传播"""
@@ -83,7 +101,11 @@ def get_video_model(model_name, num_classes=101, **kwargs):
     pretrained = kwargs.get('pretrained', True)
     
     # 支持的视频模型列表
-    supported_models = ['r3d_18', 'mc3_18', 'r2plus1d_18', 's3d']
+    supported_models = [
+        'r3d_18', 'mc3_18', 'r2plus1d_18', 's3d',
+        'mvit_v1_b', 'mvit_v2_s', 
+        'swin3d_b', 'swin3d_s', 'swin3d_t'
+    ]
     
     if model_name not in supported_models:
         raise ValueError(f"不支持的视频模型: {model_name}. 支持的模型: {supported_models}")

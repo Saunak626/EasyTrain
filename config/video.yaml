@@ -35,7 +35,7 @@ multi_gpu:
   strategy: "ddp"
 
 # 超参数配置
-hyperparameters:
+hp:
   learning_rate: 0.001
   batch_size: 256  # 384
   epochs: 2

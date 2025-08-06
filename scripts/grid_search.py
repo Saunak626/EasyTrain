@@ -50,7 +50,7 @@ def generate_combinations(config):
 
     # 检查batch_size数组模式
     model_types = _as_list(grid.get("model.type", []))
-    batch_sizes = _as_list(grid.get("hyperparameters.batch_size", []))
+    batch_sizes = _as_list(grid.get("hp.batch_size", []))
     
     # 如果batch_size数组长度与model.type数组长度相同，使用配对模式
     if (len(model_types) > 1 and len(batch_sizes) > 1 and 
@@ -61,11 +61,11 @@ def generate_combinations(config):
         
         # 处理其他参数
         other_grid = {k: v for k, v in grid.items() 
-                     if k not in ["model.type", "hyperparameters.batch_size"]}
+                     if k not in ["model.type", "hp.batch_size"]}
         
         if not other_grid:
             # 只有model.type和batch_size，直接返回配对组合
-            return [{**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+            return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
                    for model_type, batch_size in model_batch_pairs]
         else:
             # 有其他参数，需要与配对组合做笛卡尔积
@@ -75,12 +75,12 @@ def generate_combinations(config):
                 combinations = []
                 for model_type, batch_size in model_batch_pairs:
                     for other_combo in itertools.product(*other_values_lists):
-                        combo = {**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+                        combo = {**fixed, "model.type": model_type, "hp.batch_size": batch_size}
                         combo.update(dict(zip(other_keys, other_combo)))
                         combinations.append(combo)
                 return combinations
             else:
-                return [{**fixed, "model.type": model_type, "hyperparameters.batch_size": batch_size}
+                return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
                        for model_type, batch_size in model_batch_pairs]
     
     # 标准笛卡尔积模式

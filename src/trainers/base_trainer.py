@@ -251,7 +251,7 @@ def run_training(config, experiment_name=None):
     accelerator = Accelerator(log_with="swanlab")
 
     # 准备实验追踪配置
-    hyperparams = config['hyperparameters']
+    hyperparams = config['hp']
     tracker_config = {**hyperparams, "experiment_name": experiment_name}
 
     # 初始化SwanLab实验追踪器

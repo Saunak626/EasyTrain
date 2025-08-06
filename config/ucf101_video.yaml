@@ -25,7 +25,7 @@ model:
     num_classes: 101  # UCF-101有101个动作类别
 
 # 超参数配置
-hyperparameters:
+hp:
   batch_size: 128      # 批大小
   learning_rate: 0.001 # 学习率
   epochs: 10          # 训练轮数

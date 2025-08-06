@@ -4,7 +4,7 @@ training:
   save_model: true
   model_save_path: "models/model.pth"
 
-# SwanLab配置
+# 实验记录 SwanLab配置
 swanlab:
   project_name: "training_framework"
   description: "深度学习训练实验"

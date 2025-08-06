@@ -11,7 +11,7 @@ from src.trainers.base_trainer import run_training   # 核心训练函数
 def print_training_info(args, config):
     """打印训练信息"""
     experiment_name = config['training']['experiment_name']
-    hp = config['hyperparameters']
+    hp = config['hp']
     print(f"\n🚀 开始训练: {experiment_name}")
     print(f"📦 批大小: {hp.get('batch_size', 'N/A')}, 轮数: {hp.get('epochs', 'N/A')}, 学习率: {hp.get('learning_rate', 'N/A')}")
     print("-" * 50)

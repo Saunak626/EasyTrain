@@ -1,11 +1,9 @@
 """
 配置解析器 - 处理 YAML 配置和命令行参数
 """
-
 import argparse
 import yaml
 import os
-
 
 def setup_gpu_config(config):
     """仅在非 Accelerate 子进程时，从 YAML 设置 CUDA_VISIBLE_DEVICES。"""
@@ -31,11 +29,8 @@ def create_base_parser(description):
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--config", type=str, default="config/grid.yaml", help="配置文件路径")
-    # parser.add_argument("--gpu_ids", type=str, help="指定GPU ID（如：0,1 或 2,3）")
-    # parser.add_argument("--use_cpu", action="store_true", help="强制使用CPU训练")
     parser.add_argument("--multi_gpu", action="store_true", help="使用多卡训练（由调度器/子训练决定）")
-    # parser.add_argument("--accelerate_args", type=str, default="", help="透传给 accelerate launch 的额外参数")
-    
+
     # 网格搜索相关参数
     parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")
     parser.add_argument("--save_results", action="store_true", default=True, help="保存结果")
@@ -50,17 +45,15 @@ def create_base_parser(description):
     parser.add_argument("--model_name", type=str, help="模型名称")
     parser.add_argument("--model.type", type=str, help="模型类型")
     
-    parser.add_argument("--optimizer_type", type=str, help="优化器类型")
     parser.add_argument("--optimizer.name", type=str, help="优化器名称")
     parser.add_argument("--optimizer.params.weight_decay", type=float, help="权重衰减")
     parser.add_argument("--weight_decay", type=float, help="权重衰减")
-    parser.add_argument("--scheduler_type", type=str, help="调度器类型")
     parser.add_argument("--scheduler.name", type=str, help="调度器名称")
     parser.add_argument("--loss", type=str, help="损失函数类型")
     parser.add_argument("--loss.name", type=str, help="损失函数名称")
-    parser.add_argument("--hyperparameters.learning_rate", type=float, help="学习率")
-    parser.add_argument("--hyperparameters.batch_size", type=int, help="批大小")
-    parser.add_argument("--hyperparameters.epochs", type=int, help="训练轮数")
+    parser.add_argument("--hp.learning_rate", type=float, help="学习率")
+    parser.add_argument("--hp.batch_size", type=int, help="批大小")
+    parser.add_argument("--hp.epochs", type=int, help="训练轮数")
     parser.add_argument("--experiment_name", type=str, help="实验名称")
     
     return parser
@@ -105,13 +98,13 @@ def parse_arguments(mode="grid_search"):
 
     # 为单个实验应用参数覆盖（用于网格搜索中的单个实验）
     if mode == "single_experiment":
-        # 创建临时的hyperparameters节点用于兼容性
-        if "hyperparameters" not in config:
-            config["hyperparameters"] = {}
+        # 创建临时的hp节点用于兼容性
+        if "hp" not in config:
+            config["hp"] = {}
         
-        hp = config["hyperparameters"]
+        hp = config["hp"]
         
-        # 如果hyperparameters为空且存在grid_search配置，从grid中获取默认值
+        # 如果hp为空且存在grid_search配置，从grid中获取默认值
         if not hp and "grid_search" in config and "grid" in config["grid_search"]:
             grid = config["grid_search"]["grid"]
             # 从grid中提取第一个值作为默认值
@@ -139,8 +132,9 @@ def parse_arguments(mode="grid_search"):
             grid = config["grid_search"]["grid"]
             
             # 设置optimizer默认值
-            if "optimizer" not in config and "optimizer_type" in grid:
-                config["optimizer"] = {"type": grid["optimizer_type"][0] if isinstance(grid["optimizer_type"], list) else grid["optimizer_type"], "params": {}}
+            if "optimizer" not in config and "optimizer" in grid and "name" in grid["optimizer"]:
+                optimizer_name = grid["optimizer"]["name"][0] if isinstance(grid["optimizer"]["name"], list) else grid["optimizer"]["name"]
+                config["optimizer"] = {"name": optimizer_name, "params": {}}
             if "optimizer" in config and "weight_decay" in grid and "params" not in config["optimizer"]:
                 config["optimizer"]["params"] = {}
             if "optimizer" in config and "weight_decay" in grid and isinstance(grid["weight_decay"], list):
@@ -149,8 +143,9 @@ def parse_arguments(mode="grid_search"):
                 config["optimizer"]["params"]["weight_decay"] = grid["weight_decay"][0]
                 
             # 设置scheduler默认值
-            if "scheduler" not in config and "scheduler_type" in grid:
-                config["scheduler"] = {"type": grid["scheduler_type"][0] if isinstance(grid["scheduler_type"], list) else grid["scheduler_type"]}
+            if "scheduler" not in config and "scheduler" in grid and "name" in grid["scheduler"]:
+                scheduler_name = grid["scheduler"]["name"][0] if isinstance(grid["scheduler"]["name"], list) else grid["scheduler"]["name"]
+                config["scheduler"] = {"name": scheduler_name}
                 
             # 设置loss默认值
             if "loss" not in config and "loss" in grid:
@@ -163,20 +158,24 @@ def parse_arguments(mode="grid_search"):
             config["model"]["name"] = args.model_name
             # config["model"]["type"] = args.model_name
             
-        if args.optimizer_type is not None:
+        # 处理optimizer.name参数
+        optimizer_name = getattr(args, 'optimizer.name', None)
+        if optimizer_name is not None:
             if "optimizer" not in config:
                 config["optimizer"] = {"params": {}}
-            config["optimizer"]["type"] = args.optimizer_type
+            config["optimizer"]["name"] = optimizer_name
         if args.weight_decay is not None:
             if "optimizer" not in config:
                 config["optimizer"] = {"params": {}}
             if "params" not in config["optimizer"]:
                 config["optimizer"]["params"] = {}
             config["optimizer"]["params"]["weight_decay"] = args.weight_decay
-        if args.scheduler_type is not None:
+        # 处理scheduler.name参数
+        scheduler_name = getattr(args, 'scheduler.name', None)
+        if scheduler_name is not None:
             if "scheduler" not in config:
                 config["scheduler"] = {}
-            config["scheduler"]["type"] = args.scheduler_type
+            config["scheduler"]["name"] = scheduler_name
         if args.loss is not None:
             if "loss" not in config:
                 config["loss"] = {}

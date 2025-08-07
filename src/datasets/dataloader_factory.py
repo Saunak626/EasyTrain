@@ -4,7 +4,8 @@
 """
 
 import os
-from torch.utils.data import DataLoader
+import torch
+from torch.utils.data import DataLoader, Subset
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
 from .ucf101_dataset import UCF101Dataset
@@ -29,6 +30,8 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
         ValueError: 当指定的数据集名称不支持时
     """
     dataset_name = dataset_name.lower()
+    # 数据子采样比例（0-1），1.0表示使用全部数据
+    data_percentage = float(kwargs.get('data_percentage', 1.0))
 
     if dataset_name == "cifar10":
         # 创建CIFAR-10数据集
@@ -101,6 +104,16 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
 
     else:
         raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom, ucf101, ucf101_video")
+
+    # 按比例随机抽样数据子集（支持快速实验）
+    if 0 < data_percentage < 1.0:
+        def _sample_subset(dataset):
+            total = len(dataset)
+            sample_size = max(1, int(total * data_percentage))
+            indices = torch.randperm(total)[:sample_size]
+            return Subset(dataset, indices)
+        train_dataset = _sample_subset(train_dataset)
+        test_dataset = _sample_subset(test_dataset)
 
     # 创建数据加载器
     train_loader = DataLoader(

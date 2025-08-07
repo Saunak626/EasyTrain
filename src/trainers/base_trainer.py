@@ -1,11 +1,27 @@
 """基础训练器模块
 
-这个模块提供了深度学习训练的核心功能，包括：
-- train_epoch: 单个训练轮次的执行
-- test_epoch: 单个测试轮次的执行  
-- run_training: 完整训练流程的主函数
+设计思路：
+本模块采用模块化设计，将深度学习训练流程分解为独立的、可复用的组件。
+核心设计原则包括：
+- 统一接口：为图像和视频模型提供统一的训练接口
+- 模块解耦：将模型、损失函数、优化器、调度器等组件解耦，便于扩展和维护
+- 分布式支持：基于Accelerate库实现多GPU和分布式训练
+- 实验追踪：集成SwanLab等实验管理工具，便于实验监控和结果分析
+- 配置驱动：通过配置文件控制训练行为，支持灵活的实验设置
 
-支持多GPU训练、实验追踪和各种数据集类型
+核心功能：
+- train_epoch: 单个训练轮次的执行，包括前向传播、损失计算、反向传播
+- test_epoch: 单个测试轮次的执行，用于模型评估和验证
+- run_training: 完整训练流程的主函数，协调各个组件完成训练任务
+- write_epoch_metrics/write_final_result: 实验结果记录和持久化
+
+支持特性：
+- 多GPU训练和分布式训练
+- 图像分类和视频分类任务
+- 多种优化器、调度器和损失函数
+- 实验追踪和结果可视化
+- 灵活的数据集配置和加载
+- 自动混合精度训练
 """
 
 import torch
@@ -33,25 +49,53 @@ from src.utils.data_utils import set_seed                      # 随机种子设
 
 
 def write_epoch_metrics(result_dir, epoch_data, accelerator):
-    """写入epoch级别的指标数据到JSONL文件"""
+    """写入epoch级别的指标数据到JSONL文件
+    
+    设计思路：
+    - 使用JSONL格式存储每个epoch的指标，便于流式读取和分析
+    - 只在主进程中写入，避免多GPU训练时的文件冲突
+    - 支持增量写入，每个epoch的数据独立一行
+    
+    Args:
+        result_dir (str): 结果保存目录路径
+        epoch_data (dict): 包含epoch指标的字典（如loss、accuracy等）
+        accelerator (Accelerator): 用于判断是否为主进程
+    """
+    # 只在主进程中执行文件写入，避免多GPU训练时的竞争条件
     if not accelerator.is_main_process:
         return
 
+    # 确保结果目录存在
     os.makedirs(result_dir, exist_ok=True)
     jsonl_path = os.path.join(result_dir, "metrics.jsonl")
 
+    # 以追加模式写入，每个epoch数据占一行
     with open(jsonl_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(epoch_data, ensure_ascii=False) + "\n")
 
 
 def write_final_result(result_dir, result_data, accelerator):
-    """写入最终训练结果到JSON文件"""
+    """写入最终训练结果到JSON文件
+    
+    设计思路：
+    - 使用JSON格式存储最终的训练结果摘要
+    - 包含最佳指标、训练配置、模型信息等关键信息
+    - 便于后续的结果分析和模型比较
+    
+    Args:
+        result_dir (str): 结果保存目录路径
+        result_data (dict): 包含最终训练结果的字典
+        accelerator (Accelerator): 用于判断是否为主进程
+    """
+    # 只在主进程中执行文件写入
     if not accelerator.is_main_process:
         return
 
+    # 确保结果目录存在
     os.makedirs(result_dir, exist_ok=True)
     final_path = os.path.join(result_dir, "result.json")
 
+    # 写入格式化的JSON文件，便于人工阅读
     with open(final_path, "w", encoding="utf-8") as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
 
@@ -60,8 +104,19 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     """
     执行单个训练轮次
 
-    该函数负责一个完整epoch的训练过程，包括前向传播、损失计算、
-    反向传播、参数更新和学习率调整。支持多GPU分布式训练。
+    设计思路：
+    - 标准的深度学习训练循环：前向传播 -> 损失计算 -> 反向传播 -> 参数更新
+    - 使用Accelerator库实现多GPU和混合精度训练的透明支持
+    - 集成进度条显示，提供训练过程的实时反馈
+    - 支持学习率调度，实现动态学习率调整策略
+    - 统计训练指标，便于监控训练效果
+
+    训练流程：
+    1. 设置模型为训练模式
+    2. 初始化训练指标和进度条
+    3. 遍历数据批次，执行训练步骤
+    4. 更新学习率调度器
+    5. 返回平均损失
 
     Args:
         dataloader (torch.utils.data.DataLoader): 训练数据加载器，提供批次数据
@@ -274,6 +329,7 @@ def run_training(config, experiment_name=None):
         data_dir=data_config.get('root', './data'),
         batch_size=hyperparams['batch_size'],
         num_workers=data_config.get('num_workers', 4),
+        data_percentage=hyperparams.get('data_percentage', 1.0),
         **data_config.get('params', {})
     )
     

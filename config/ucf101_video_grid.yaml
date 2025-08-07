@@ -25,6 +25,11 @@ model:
   params:
     num_classes: 101  # UCF-101有101个动作类别
 
+# 超参数配置（统一参数，不参与网格搜索）
+hp:
+  epochs: 1           # 训练轮数
+  data_percentage: 0.5  # 使用数据的百分比
+
 # GPU配置
 gpu:
   device_ids: "2,3"
@@ -51,20 +56,15 @@ grid_search:
       "mvit_v1_b", "mvit_v2_s",
       "swin3d_b", "swin3d_s", "swin3d_t"
     ] 
-    # [
-    #   "r3d_18", "mc3_18", "r2plus1d_18", "s3d",
-    #   "mvit_v1_b", "mvit_v2_s",
-    #   "swin3d_b", "swin3d_s", "swin3d_t"
-    # ]
-    
+
     # 超参数
     hp.learning_rate: [0.001]
+    
     # batch_size支持两种模式：
     # 1. 单一值：所有模型使用相同的batch_size，如 [128]
     # 2. 对应数组：与model.type数量相同，按顺序对应每个模型的batch_size
     hp.batch_size: [128, 128, 128, 32, 16, 16, 16, 16, 16]
-    hp.epochs: [10]
-    
+
     # 优化器参数
     optimizer.name: ["adam"]
     optimizer.params.weight_decay: [0.0001]

@@ -27,8 +27,8 @@ model:
 
 # 超参数配置（统一参数，不参与网格搜索）
 hp:
-  epochs: 20           # 训练轮数
-  data_percentage: 1.0  # 使用数据的百分比
+  epochs: 2           # 训练轮数
+  data_percentage: 0.2  # 使用数据的百分比
 
 # GPU配置
 gpu:

@@ -36,8 +36,8 @@ if __name__ == "__main__":
         pprint(config_data, sort_dicts=False)
         
         # 1. 访问顶层键
-        exp_name = config_data['training']['experiment_name']
-        print(f"实验名称 (training -> experiment_name): {exp_name}")
+        exp_name = config_data['training']['exp_name']
+        print(f"实验名称 (training -> exp_name): {exp_name}")
         
         # 2. 访问嵌套的键
         num_classes = config_data['model']['params']['num_classes']

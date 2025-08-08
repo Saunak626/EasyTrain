@@ -157,7 +157,7 @@ hyperparameters:
 
 ### 场景1: CIFAR-10基准测试
 ```bash
-python scripts/train.py --config config/config.yaml --experiment_name cifar10_baseline
+python scripts/train.py --config config/config.yaml --exp_name cifar10_baseline
 ```
 
 ### 场景2: 预训练模型训练
@@ -168,7 +168,7 @@ python scripts/train.py --config config/config.yaml --experiment_name cifar10_ba
 #   params:
 #     freeze_backbone: false
 
-python scripts/train.py --config config/config.yaml --experiment_name resnet18_cifar10
+python scripts/train.py --config config/config.yaml --exp_name resnet18_cifar10
 ```
 
 ### 场景3: 预训练模型网格搜索
@@ -228,7 +228,7 @@ python scripts/train.py --config config/config.yaml \
 ```bash
 python scripts/train.py \
   --config config/config.yaml \      # 配置文件路径
-  --experiment_name my_exp \          # 实验名称
+  --exp_name my_exp \          # 实验名称
   --learning_rate 0.01 \              # 学习率
   --batch_size 64 \                   # 批大小
   --epochs 50 \                       # 训练轮数

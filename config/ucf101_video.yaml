@@ -3,7 +3,7 @@
 
 # 训练配置
 training:
-  experiment_name: ucf101_video_r3d18 # 实验名称
+  exp_name: ucf101_video_r3d18 # 实验名称
 
 # SwanLab实验追踪配置
 swanlab:

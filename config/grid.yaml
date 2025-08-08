@@ -1,6 +1,6 @@
 # 训练配置
 training:
-  experiment_name: "default_exp"
+  exp_name: "default_exp"
   save_model: true
   model_save_path: "models/model.pth"
 

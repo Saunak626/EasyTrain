@@ -88,8 +88,8 @@ def create_base_parser(description):
     parser.add_argument("--epochs", type=int, help="训练轮数")
     parser.add_argument("--dropout", type=float, help="Dropout率")
     parser.add_argument("--model_name", type=str, help="模型名称")
-    parser.add_argument("--experiment_name", type=str, help="实验名称")
-    parser.add_argument("--data_percentage", type=float, default=0.5, help="使用数据的百分比 (0.0-1.0)")
+    parser.add_argument("--exp_name", type=str, help="实验名称")
+    parser.add_argument("--data_percentage", type=float, default=None, help="使用数据的百分比 (0.0-1.0)")
     
     # === 嵌套配置参数 ===
     # 支持点号分隔的深层配置覆盖，实现精确的配置控制
@@ -297,8 +297,8 @@ def parse_arguments(mode="grid_search"):
             config["loss"]["type"] = args.loss
             
         # 处理实验名称
-        if args.experiment_name is not None:
-            config["training"]["experiment_name"] = args.experiment_name
+        if args.exp_name is not None:
+            config["training"]["exp_name"] = args.exp_name
 
     # === 第6步：配置GPU环境 ===
     # 根据配置设置GPU环境，包括设备选择和分布式训练配置

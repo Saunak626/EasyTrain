@@ -3,7 +3,7 @@
 
 # 训练配置
 training:
-  experiment_name: "ucf101_grid_exp"
+  exp_name: "ucf101_grid_exp"
   save_model: true
   model_save_path: "models/video_model.pth"
 

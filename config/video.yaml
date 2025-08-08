@@ -3,7 +3,7 @@
 
 # 训练配置
 training:
-  experiment_name: "ucf101_baseline"
+  exp_name: "ucf101_baseline"
   save_model: true
   model_save_path: "models/video_model.pth"
 

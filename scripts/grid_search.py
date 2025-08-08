@@ -234,7 +234,7 @@ def save_results_to_csv(results, filename):
             - 超参数字段（如model.type, hp.batch_size等）
             - best_accuracy: 最佳准确率
             - final_accuracy: 最终准确率
-            - experiment_name: 实验名称
+            - exp_name: 实验名称
         filename (str): CSV文件名（不含路径）
         
     Returns:
@@ -254,7 +254,7 @@ def save_results_to_csv(results, filename):
     param_keys = sorted({k for r in results for k in r.get("params", {}).keys()})
 
     fieldnames = [
-        "experiment_id", "experiment_name", "success",
+        "experiment_id", "exp_name", "success",
         "best_accuracy", "final_accuracy"
     ] + param_keys
 
@@ -264,7 +264,7 @@ def save_results_to_csv(results, filename):
         for i, r in enumerate(results, 1):
             row = {
                 "experiment_id": f"{i:03d}",
-                "experiment_name": r.get("exp_name"),
+                "exp_name": r.get("exp_name"),
                 "success": r.get("success"),
                 "best_accuracy": r.get("best_accuracy"),
                 "final_accuracy": r.get("final_accuracy"),
@@ -348,13 +348,13 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
         cmd = [sys.executable, "-u"]
     
     # 添加训练脚本和基础参数
-    cmd.extend(["scripts/train.py", "--config", config_path, "--experiment_name", exp_name])
+    cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
     
     # 添加参数覆盖
     for k, v in (params or {}).items():
         cmd.extend([f"--{k}", str(v)])
 
-    print(f"\n{'='*60}")
+    print(f"{'='*60}")
     print(f"🚀 开始实验 {exp_id}: {exp_name}")
     print(f"📋 参数: {params}")
     print(f"{'='*60}")
@@ -371,7 +371,7 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
         rc = process.wait()
     except KeyboardInterrupt:
         # 捕获到 Ctrl+C (KeyboardInterrupt)
-        print(f"\n捕获到中断信号(Ctrl+C)，正在终止子进程 {process.pid}...")
+        print(f"捕获到中断信号(Ctrl+C)，正在终止子进程 {process.pid}...")
         process.terminate()  # 发送 SIGTERM 信号，请求子进程终止
         process.wait()       # 等待子进程完全退出
         print("子进程已终止。")
@@ -381,13 +381,16 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
 
     # 从文件解析结果
     best_accuracy, final_accuracy = parse_result_from_files(exp_name)
-    if success:
-        if best_accuracy == 0.0 and final_accuracy == 0.0:
-            print(f"⚠️  {exp_name} 结束，但未找到结果文件。请检查 runs/{exp_name}/。")
-        else:
-            print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
-    else:
-        print(f"❌ 实验 {exp_name} 失败（返回码 {rc}）。请查看控制台与 runs/{exp_name}/。")
+    
+    print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
+    
+    # if success:
+    #     if best_accuracy == 0.0 and final_accuracy == 0.0:
+    #         print(f"⚠️  {exp_name} 结束，但未找到结果文件。请检查 runs/{exp_name}/。")
+    #     else:
+    #         print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
+    # else:
+    #     print(f"❌ 实验 {exp_name} 失败（返回码 {rc}）。请查看控制台与 runs/{exp_name}/。")
 
     return {
         "success": success,
@@ -409,7 +412,7 @@ def run_grid_search(args):
     if len(combinations) > args.max_experiments:
         combinations = combinations[:args.max_experiments]
 
-    print(f"\n🚀 开始网格搜索，共 {len(combinations)} 个实验")
+    print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")
     print(f"🎯 多卡训练: {'是' if args.multi_gpu else '否'}")
     print("=" * 60)
@@ -418,7 +421,7 @@ def run_grid_search(args):
     successful = 0
 
     for i, params in enumerate(combinations, 1):
-        print(f"\n📊 准备实验 {i}/{len(combinations)}")
+        print(f"📊 准备实验 {i}/{len(combinations)}")
 
         result = run_single_experiment(
             params, f"{i:03d}",
@@ -434,7 +437,7 @@ def run_grid_search(args):
         # time.sleep(1.0)
 
     # 总结
-    print("\n" + "=" * 60)
+    print("=" * 60)
     print(f"📈 网格搜索完成！")
     print(f"✅ 成功实验数量: {successful}/{len(combinations)}")
 
@@ -444,13 +447,13 @@ def run_grid_search(args):
         # 找到“最佳准确率”最高的实验结果
         best_result = max(successful_results, key=lambda x: x["best_accuracy"])
 
-        print(f"\n🏆 最佳实验结果:")
+        print(f"🏆 最佳实验结果:")
         print(f"实验名称: {best_result['exp_name']}, 最佳准确率: {best_result['best_accuracy']:.2f}%, 最终准确率: {best_result['final_accuracy']:.2f}%")
         
         # 按最佳精度排序前n组结果
         top_results = sorted(successful_results, key=lambda x: x["best_accuracy"], reverse=True)[:args.top_n]
         
-        print(f"\n📊 前{args.top_n}名实验结果:")
+        print(f"📊 前{args.top_n}名实验结果:")
         for i, r in enumerate(top_results, 1):
             print(f"{i}. {r['exp_name']} - {r['best_accuracy']:.2f}% - {r['params']}")
 
@@ -459,7 +462,7 @@ def run_grid_search(args):
         results_filename = f"grid_search_results_{timestamp}.csv"
         saved_filepath = save_results_to_csv(results, results_filename)
         if saved_filepath:
-            print(f"\n💾 结果已保存到: {saved_filepath}")
+            print(f"💾 结果已保存到: {saved_filepath}")
 
     return 0 if successful > 0 else 1
 

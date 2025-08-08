@@ -11,7 +11,7 @@
 python scripts/train.py --config config/base.yaml
 
 # 指定实验名称
-python scripts/train.py --config config/base.yaml --experiment_name my_experiment
+python scripts/train.py --config config/base.yaml --exp_name my_experiment
 
 # 覆盖超参数
 python scripts/train.py --config config/base.yaml --learning_rate 0.01 --batch_size 128 --epochs 10
@@ -33,7 +33,7 @@ python scripts/train.py --config config/base.yaml --multi_gpu
 python scripts/train.py --config config/base.yaml --multi_gpu --gpu_ids "0,1,2,3"
 
 # 多卡训练 + 自定义实验名称
-python scripts/train.py --config config/base.yaml --multi_gpu --experiment_name multi_gpu_test
+python scripts/train.py --config config/base.yaml --multi_gpu --exp_name multi_gpu_test
 
 # 多卡训练 + 超参数调整
 python scripts/train.py --config config/base.yaml --multi_gpu --learning_rate 0.001 --batch_size 256
@@ -86,7 +86,7 @@ python scripts/grid_search.py --config config/grid.yaml --multi_gpu --results_fi
 
 ### 4.1 通用参数
 - `--config`: 配置文件路径
-- `--experiment_name`: 实验名称
+- `--exp_name`: 实验名称
 - `--gpu_ids`: 指定GPU ID，如 "0,1,2"
 - `--use_cpu`: 强制使用CPU训练
 - `--multi_gpu`: 启用多卡训练
@@ -107,19 +107,19 @@ python scripts/grid_search.py --config config/grid.yaml --multi_gpu --results_fi
 ### 5.1 快速测试
 ```bash
 # 单卡快速测试（5个epoch）
-python scripts/train.py --config config/base.yaml --epochs 5 --experiment_name quick_test
+python scripts/train.py --config config/base.yaml --epochs 5 --exp_name quick_test
 
 # 多卡快速测试
-python scripts/train.py --config config/base.yaml --multi_gpu --epochs 5 --experiment_name quick_multi_test
+python scripts/train.py --config config/base.yaml --multi_gpu --epochs 5 --exp_name quick_multi_test
 ```
 
 ### 5.2 完整训练
 ```bash
 # 单卡完整训练
-python scripts/train.py --config config/base.yaml --epochs 100 --experiment_name full_training
+python scripts/train.py --config config/base.yaml --epochs 100 --exp_name full_training
 
 # 多卡完整训练
-python scripts/train.py --config config/base.yaml --multi_gpu --epochs 100 --experiment_name full_multi_training
+python scripts/train.py --config config/base.yaml --multi_gpu --epochs 100 --exp_name full_multi_training
 ```
 
 ### 5.3 网格搜索示例

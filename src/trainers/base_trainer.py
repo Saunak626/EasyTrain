@@ -1,7 +1,5 @@
-"""基础训练器模块
-
-设计思路：
-本模块采用模块化设计，将深度学习训练流程分解为独立的、可复用的组件。
+"""
+基础训练器模块
 核心设计原则包括：
 - 统一接口：为图像和视频模型提供统一的训练接口
 - 模块解耦：将模型、损失函数、优化器、调度器等组件解耦，便于扩展和维护
@@ -24,18 +22,17 @@
 - 自动混合精度训练
 """
 
+import os
+import sys
+import json
 import torch
 import torch.nn as nn
-from accelerate import Accelerator
-from tqdm import tqdm
-import sys
-import os
-import json
-from datetime import datetime
 
-# 添加项目根目录到路径，确保可以正确导入项目内的模块
-# 这是一种常见的做法，用于解决Python模块导入路径问题
-# 通过os.path.dirname的三层嵌套调用，获取到项目根目录
+from tqdm import tqdm
+from datetime import datetime
+from accelerate import Accelerator
+
+# 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 导入项目内部模块
@@ -45,7 +42,7 @@ from src.losses.image_loss import get_loss_function            # 损失函数工
 from src.optimizers.optim import get_optimizer                 # 优化器工厂函数
 from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
-from src.utils.data_utils import set_seed                      # 随机种子设置工具
+from src.utils.data_utils import set_seed
 
 
 def write_epoch_metrics(result_dir, epoch_data, accelerator):
@@ -278,7 +275,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     return None, None
 
 
-def run_training(config, experiment_name=None):
+def run_training(config, exp_name=None):
     """
     训练的主入口函数，负责整个训练过程的协调，包括：
     - 环境初始化（随机种子、实验追踪）
@@ -290,7 +287,7 @@ def run_training(config, experiment_name=None):
 
     Args:
         config (dict): 包含所有训练配置的字典，包括模型、数据、超参数等设置
-        experiment_name (str, optional): 实验名称，用于追踪和日志记录
+        exp_name (str, optional): 实验名称，用于追踪和日志记录
 
     Returns:
         dict: 训练结果字典，包含实验名称、最佳准确率和配置信息
@@ -298,25 +295,27 @@ def run_training(config, experiment_name=None):
     # 设置随机种子确保实验可重现性
     set_seed(42)
 
-    # 确定实验名称，优先使用传入参数
-    if experiment_name is None:
-        experiment_name = config['training']['experiment_name']
+    # 实验名称，优先使用传入函数的参数
+    if exp_name is None:
+        exp_name = config['training']['exp_name']
 
-    # 初始化Accelerator，自动处理多GPU和混合精度训练
+    # 初始化Accelerator，指定swanlab为日志记录工具
     accelerator = Accelerator(log_with="swanlab")
 
-    # 准备实验追踪配置
+    # 记录到SwanLab的超参数
     hyperparams = config['hp']
-    tracker_config = {**hyperparams, "experiment_name": experiment_name}
+    tracker_config = {**hyperparams, "exp_name": exp_name}
 
     # 初始化SwanLab实验追踪器
     accelerator.init_trackers(
-        project_name=config['swanlab']['project_name'],
-        config=tracker_config,
-        init_kwargs={"swanlab": {
-            "experiment_name": experiment_name,
-            "description": config['swanlab']['description']
-        }}
+        project_name=config['swanlab']['project_name'], # SwanLab UI中项目名称
+        config=tracker_config,    # 要记录的超参数
+        init_kwargs={             # 额外初始化参数
+            "swanlab": {
+                "exp_name": exp_name,
+                "description": config['swanlab']['description']
+            }
+        }
     )
 
     # 解析数据配置
@@ -398,38 +397,26 @@ def run_training(config, experiment_name=None):
     )
 
     # 使用Accelerator包装所有训练组件，自动处理多GPU分布式训练
-    try:
-        # 清理GPU缓存，释放未使用的内存
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    
+    # # 清理GPU缓存，释放未使用的内存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-        # 使用Accelerator包装训练组件，自动处理分布式训练
-        model, optimizer, lr_scheduler, train_dataloader, test_dataloader = accelerator.prepare(
-            model, optimizer, lr_scheduler, train_dataloader, test_dataloader
-        )
-
-    except RuntimeError as e:
-        # 处理常见的GPU内存不足错误
-        if "out of memory" in str(e):
-            print(f"❌ GPU内存不足: {e}")
-            print("💡 建议解决方案:")
-            print("  1. 减少batch_size")
-            print("  2. 使用更小的模型")
-            print("  3. 使用CPU训练: --use_cpu")
-            raise e
-        else:
-            raise e
+    # 使用Accelerator包装训练组件，自动处理分布式训练
+    model, optimizer, lr_scheduler, train_dataloader, test_dataloader = accelerator.prepare(
+        model, optimizer, lr_scheduler, train_dataloader, test_dataloader
+    )
 
     # 打印训练配置信息（仅在主进程）
     if accelerator.is_main_process:
-        print(f"\n=== 训练实验: {experiment_name} ===")
-        print(f"数据集: {dataset_type}")
-        print(f"模型: {model_name}")
-        print(f"参数: {hyperparams}")
-        print("=" * 50)
+        print(f"========== 训练实验: {exp_name} ==========")
+        print(f"  数据集: {dataset_type}")
+        print(f"  模型: {model_name}")
+        print(f"  参数: {hyperparams}")
+        print("=" * 80)
 
     # 设置结果目录
-    result_dir = os.path.join("runs", experiment_name) if experiment_name else None
+    result_dir = os.path.join("runs", exp_name) if exp_name else None
 
     # 初始化最佳准确率追踪
     best_accuracy = 0.0
@@ -437,15 +424,15 @@ def run_training(config, experiment_name=None):
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
-            tqdm.write(f"\nEpoch {epoch}/{hyperparams['epochs']}")
+            tqdm.write(f"Epoch {epoch}/{hyperparams['epochs']}")
 
-        # 执行一轮训练和测试
+        # 训练epoch
         train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
-        
+        # 测试epoch
         val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
 
         # 更新并记录最佳准确率
-        if accelerator.is_main_process and val_accuracy and val_accuracy > best_accuracy:
+        if accelerator.is_main_process and val_accuracy > best_accuracy:
             best_accuracy = val_accuracy
             tqdm.write(f"新最佳准确率: {best_accuracy:.2f}%")
 
@@ -467,18 +454,18 @@ def run_training(config, experiment_name=None):
 
     # 写入最终结果
     if accelerator.is_main_process:
-        tqdm.write(f"\n训练完成! 最佳准确率: {best_accuracy:.2f}%")
+        tqdm.write(f"训练完成! 最佳准确率: {best_accuracy:.2f}%")
 
-        # 输出机器可读的结果行
-        result_json = {"best_accuracy": best_accuracy, "final_accuracy": best_accuracy}
-        print("##RESULT## " + json.dumps(result_json))
-
+        # # 输出机器可读的结果行
+        # result_json = {"best_accuracy": best_accuracy, "final_accuracy": val_accuracy}
+        # print("##RESULT## " + json.dumps(result_json))
+        
         # 写入最终结果文件
         if result_dir:
             final_result = {
-                "experiment_name": experiment_name,
+                "exp_name": exp_name,
                 "best_accuracy": best_accuracy,
-                "final_accuracy": best_accuracy,
+                "final_accuracy": val_accuracy,
                 "total_epochs": hyperparams['epochs'],
                 "config": tracker_config,
                 "timestamp": datetime.now().isoformat()
@@ -487,7 +474,7 @@ def run_training(config, experiment_name=None):
 
     # 返回训练结果摘要
     return {
-        "experiment_name": experiment_name,    # 实验名称
+        "exp_name": exp_name,    # 实验名称
         "best_accuracy": best_accuracy,        # 最佳测试准确率
         "config": tracker_config               # 完整的训练配置
     }

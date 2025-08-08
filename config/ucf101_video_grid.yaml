@@ -3,7 +3,7 @@
 
 # 训练配置
 training:
-  experiment_name: "ucf101_grid_exp"
+  exp_name: "ucf101_grid_exp"
   save_model: true
   model_save_path: "models/video_model.pth"
 
@@ -27,8 +27,8 @@ model:
 
 # 超参数配置（统一参数，不参与网格搜索）
 hp:
-  epochs: 1           # 训练轮数
-  data_percentage: 0.5  # 使用数据的百分比
+  epochs: 20           # 训练轮数
+  data_percentage: 1.0  # 使用数据的百分比
 
 # GPU配置
 gpu:

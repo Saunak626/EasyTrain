@@ -626,7 +626,7 @@ def get_loss_function(loss_type="cross_entropy", **kwargs):
 
 ```python
 # 在 scripts/train.py 中集成自定义组件
-def run_training(config, experiment_name=None):
+def run_training(config, exp_name=None):
     # ... 现有代码
 
     # 使用自定义数据集
@@ -819,7 +819,7 @@ class TestIntegration(unittest.TestCase):
         }
 
         # 运行训练
-        result = run_training(config, experiment_name='test_custom')
+        result = run_training(config, exp_name='test_custom')
         
         # 验证结果
         self.assertIsNotNone(result)

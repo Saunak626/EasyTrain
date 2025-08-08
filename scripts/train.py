@@ -24,27 +24,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils.config_parser import parse_arguments  # 参数解析器
 from src.trainers.base_trainer import run_training   # 核心训练函数
 
-# def print_training_info(args, config):
-#     """打印训练信息
-#     Args:
-#         args: 命令行参数对象（当前版本未使用，预留扩展）
-#         config (dict): 完整的训练配置字典
-#             - training.exp_name: 实验名称
-#             - hp.batch_size: 批大小
-#             - hp.epochs: 训练轮数
-#             - hp.learning_rate: 学习率
-    
-#     功能：
-#         - 展示实验名称，便于实验跟踪
-#         - 显示核心超参数，便于参数确认
-#         - 使用分隔线，提升输出格式美观性
-#     """
-#     exp_name = config['training']['exp_name']
-#     hp = config['hp']
-#     print(f"🚀 开始训练: {exp_name}")
-#     print(f"📦 批大小: {hp.get('batch_size', 'N/A')}, 轮数: {hp.get('epochs', 'N/A')}, 学习率: {hp.get('learning_rate', 'N/A')}")
-#     print("-" * 50)
-
 
 def main():
     """

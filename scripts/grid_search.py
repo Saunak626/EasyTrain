@@ -384,13 +384,6 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
     
     print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
     
-    # if success:
-    #     if best_accuracy == 0.0 and final_accuracy == 0.0:
-    #         print(f"⚠️  {exp_name} 结束，但未找到结果文件。请检查 runs/{exp_name}/。")
-    #     else:
-    #         print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
-    # else:
-    #     print(f"❌ 实验 {exp_name} 失败（返回码 {rc}）。请查看控制台与 runs/{exp_name}/。")
 
     return {
         "success": success,

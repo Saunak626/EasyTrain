@@ -456,10 +456,6 @@ def run_training(config, exp_name=None):
     if accelerator.is_main_process:
         tqdm.write(f"训练完成! 最佳准确率: {best_accuracy:.2f}%")
 
-        # # 输出机器可读的结果行
-        # result_json = {"best_accuracy": best_accuracy, "final_accuracy": val_accuracy}
-        # print("##RESULT## " + json.dumps(result_json))
-        
         # 写入最终结果文件
         if result_dir:
             final_result = {

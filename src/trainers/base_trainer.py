@@ -45,56 +45,7 @@ from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加
 from src.utils.data_utils import set_seed
 
 
-def write_epoch_metrics(result_dir, epoch_data, accelerator):
-    """写入epoch级别的指标数据到JSONL文件
-    
-    设计思路：
-    - 使用JSONL格式存储每个epoch的指标，便于流式读取和分析
-    - 只在主进程中写入，避免多GPU训练时的文件冲突
-    - 支持增量写入，每个epoch的数据独立一行
-    
-    Args:
-        result_dir (str): 结果保存目录路径
-        epoch_data (dict): 包含epoch指标的字典（如loss、accuracy等）
-        accelerator (Accelerator): 用于判断是否为主进程
-    """
-    # 只在主进程中执行文件写入，避免多GPU训练时的竞争条件
-    if not accelerator.is_main_process:
-        return
-
-    # 确保结果目录存在
-    os.makedirs(result_dir, exist_ok=True)
-    jsonl_path = os.path.join(result_dir, "metrics.jsonl")
-
-    # 以追加模式写入，每个epoch数据占一行
-    with open(jsonl_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(epoch_data, ensure_ascii=False) + "\n")
-
-
-def write_final_result(result_dir, result_data, accelerator):
-    """写入最终训练结果到JSON文件
-    
-    设计思路：
-    - 使用JSON格式存储最终的训练结果摘要
-    - 包含最佳指标、训练配置、模型信息等关键信息
-    - 便于后续的结果分析和模型比较
-    
-    Args:
-        result_dir (str): 结果保存目录路径
-        result_data (dict): 包含最终训练结果的字典
-        accelerator (Accelerator): 用于判断是否为主进程
-    """
-    # 只在主进程中执行文件写入
-    if not accelerator.is_main_process:
-        return
-
-    # 确保结果目录存在
-    os.makedirs(result_dir, exist_ok=True)
-    final_path = os.path.join(result_dir, "result.json")
-
-    # 写入格式化的JSON文件，便于人工阅读
-    with open(final_path, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, ensure_ascii=False, indent=2)
+# JSON文件写入函数已删除，改为直接返回训练结果
 
 
 def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
@@ -436,41 +387,24 @@ def run_training(config, exp_name=None):
             best_accuracy = val_accuracy
             tqdm.write(f"新最佳准确率: {best_accuracy:.2f}%")
 
-        # 写入epoch级别的结构化数据
-        if accelerator.is_main_process and result_dir and val_accuracy is not None:
-            epoch_data = {
-                "event": "epoch_end",
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "val_acc": val_accuracy,
-                "best_acc": best_accuracy,
-                "timestamp": datetime.now().isoformat()
-            }
-            write_epoch_metrics(result_dir, epoch_data, accelerator)
+        # JSON文件写入已删除，只保留SwanLab记录
 
     # 结束实验追踪，保存日志和结果
     accelerator.end_training()
 
-    # 写入最终结果
+    # 输出训练完成信息
     if accelerator.is_main_process:
         tqdm.write(f"训练完成! 最佳准确率: {best_accuracy:.2f}%")
 
-        # 写入最终结果文件
-        if result_dir:
-            final_result = {
-                "exp_name": exp_name,
-                "best_accuracy": best_accuracy,
-                "final_accuracy": val_accuracy,
-                "total_epochs": hyperparams['epochs'],
-                "config": tracker_config,
-                "timestamp": datetime.now().isoformat()
-            }
-            write_final_result(result_dir, final_result, accelerator)
+    # 清理GPU缓存，为下一个实验释放资源
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    # 返回训练结果摘要
+    # 返回训练结果摘要（直接返回，不写入文件）
     return {
-        "exp_name": exp_name,    # 实验名称
+        "success": True,                       # 训练成功标志
+        "exp_name": exp_name,                  # 实验名称
         "best_accuracy": best_accuracy,        # 最佳测试准确率
+        "final_accuracy": val_accuracy,        # 最终准确率
         "config": tracker_config               # 完整的训练配置
     }

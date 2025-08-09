@@ -1,26 +1,26 @@
 """网格搜索启动脚本
 
 设计思路：
-本脚本采用调度器-执行器分离的架构设计，实现了高效、稳定的超参数网格搜索。
+本脚本实现了高效、稳定的超参数网格搜索，采用进程内调用的架构设计。
 核心设计原则包括：
-- 进程隔离：调度器保持单进程运行，每个实验独立启动子进程，确保资源干净释放
-- 多模式支持：支持单卡/CPU和多卡分布式训练，自动选择合适的启动方式
-- 环境隔离：为每个实验设置独立的分布式环境变量，避免进程间串扰
+- 进程内调用：直接调用训练函数，避免子进程开销和文件I/O依赖
+- 内存传递：通过函数返回值直接获取训练结果，提高效率和可靠性
+- 资源管理：每个实验后自动清理GPU缓存，确保资源干净释放
 - 灵活配置：支持笛卡尔积和特殊配对模式的参数组合生成
-- 结果管理：自动解析实验结果，生成结构化的CSV报告
+- 结果管理：直接收集训练结果，生成结构化的CSV报告
 
 核心功能：
 - generate_combinations: 智能参数组合生成，支持多种组合策略
-- run_single_experiment: 单实验执行器，处理进程启动和结果收集
+- run_single_experiment: 单实验执行器，进程内调用训练函数
 - run_grid_search: 网格搜索调度器，协调整个搜索流程
-- parse_result_from_files: 结果解析器，从多种格式中提取训练指标
+- apply_param_overrides: 参数覆盖器，支持嵌套参数路径
 - save_results_to_csv: 结果持久化，生成便于分析的CSV报告
 
 特殊处理：
-- 端口管理：为每个实验分配唯一MASTER_PORT，避免分布式训练冲突
-- 环境清理：清理父进程的分布式环境变量，确保子进程环境干净
-- 中断处理：优雅处理Ctrl+C中断，确保子进程正确终止
+- 异常处理：单个实验失败不影响后续实验继续执行
+- 内存管理：每个实验后清理GPU缓存，防止内存泄漏
 - 配对模式：当batch_size数组与model数组长度相同时，按对应顺序配对
+- SwanLab集成：保留SwanLab实验追踪，删除JSON文件依赖
 """
 import itertools
 import subprocess
@@ -156,64 +156,7 @@ def generate_combinations(config):
     return [{**fixed, **dict(zip(keys, combo))} 
             for combo in itertools.product(*values_lists)]
 
-def parse_result_from_files(exp_name):
-    """从结构化文件中解析最终结果
-    
-    设计思路：
-    实现多层次的结果解析策略，确保在不同情况下都能获取到有效的训练结果。
-    采用优先级回退机制，提高结果解析的鲁棒性。
-    
-    解析策略：
-    1. 优先级1：result.json - 包含完整的最终结果摘要
-    2. 优先级2：metrics.jsonl - 逐行解析训练过程中的指标
-    3. 回退：返回默认值(0.0, 0.0)
-    
-    Args:
-        exp_name (str): 实验名称，用于构建结果文件路径
-        
-    Returns:
-        tuple[float, float]: (最佳准确率, 最终准确率)
-            - 最佳准确率：训练过程中达到的最高验证准确率
-            - 最终准确率：训练结束时的验证准确率
-    
-    文件格式：
-        - result.json: {"best_accuracy": float, "final_accuracy": float}
-        - metrics.jsonl: 每行一个JSON对象，包含"val_acc"字段
-    """
-    result_dir = os.path.join("runs", exp_name)
-    final_json = os.path.join(result_dir, "result.json")
-    metrics_path = os.path.join(result_dir, "metrics.jsonl")
-
-    # 优先读取 result.json
-    try:
-        if os.path.exists(final_json):
-            with open(final_json, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-                best_accuracy = float(data.get("best_accuracy", 0.0))
-                final_accuracy = float(data.get("final_accuracy", best_accuracy))
-                return best_accuracy, final_accuracy
-    except Exception:
-        pass
-
-    # 回退：扫描 metrics.jsonl
-    try:
-        if os.path.exists(metrics_path):
-            last_val, best_val = None, 0.0
-            with open(metrics_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        va = json.loads(line).get("val_acc")
-                        if isinstance(va, (int, float)):
-                            last_val = float(va)
-                            best_val = max(best_val, last_val)
-                    except Exception:
-                        continue
-            if last_val is not None:
-                return best_val, last_val
-    except Exception:
-        pass
-
-    return 0.0, 0.0
+# parse_result_from_files 函数已删除，改为直接从训练函数获取结果
 
 
 def save_results_to_csv(results, filename):
@@ -275,123 +218,86 @@ def save_results_to_csv(results, filename):
     return filepath
 
 
-# ================= 多卡子进程启动辅助函数 =================
-
-def _clean_env_for_child():
-    """
-    清理父进程的分布式环境变量
-    
-    设计思路：
-    在网格搜索场景下，调度器进程可能已经设置了分布式相关的环境变量。
-    如果子进程继承这些变量，可能导致分布式训练初始化失败或连接错误。
-    因此需要为每个子实验提供干净的环境。
-    
-    清理的环境变量：
-    - LOCAL_RANK: 本地进程排名
-    - RANK: 全局进程排名  
-    - WORLD_SIZE: 总进程数
-    - MASTER_ADDR: 主节点地址
-    - MASTER_PORT: 主节点端口
-    
-    Returns:
-        dict: 清理后的环境变量字典，可直接用于subprocess
-    
-    使用场景：
-        每次启动新的训练子进程时调用，确保环境隔离
-    """
-    env = os.environ.copy()
-    for k in ["LOCAL_RANK", "RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"]:
-        env.pop(k, None)
-    return env
+# 子进程启动辅助函数已删除，改为进程内调用方式
 
 
-def _unique_master_port(base=20000, span=10000):
-    """为每个实验分配唯一端口
-    
-    设计思路：
-    在并发或连续运行多个分布式训练实验时，如果使用相同的MASTER_PORT，
-    会导致NCCL连接冲突和通信异常。通过随机分配端口避免此问题。
+def apply_param_overrides(config, params):
+    """应用参数覆盖到配置字典
     
     Args:
-        base (int): 端口范围起始值，默认20000
-        span (int): 端口范围大小，默认10000
+        config (dict): 基础配置字典
+        params (dict): 参数覆盖字典，支持嵌套路径如 "hp.batch_size"
         
     Returns:
-        str: 随机生成的端口号字符串
-        
-    端口范围：
-        [base, base+span)，默认为[20000, 30000)
-        避开常用端口，减少冲突概率
+        dict: 应用覆盖后的配置字典
     """
-    return str(base + random.randint(0, span))
-
-
-def _infer_num_procs() -> int:
-    env_ids = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
-    if env_ids:
-        return max(1, len([x for x in env_ids.split(",") if x.strip() != ""]))
-    try:
-        import torch
-        return max(1, torch.cuda.device_count())
-    except Exception:
-        return 1
-
-
-def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"): #, accelerate_args=""):
-    """运行单个实验（每个实验独立的进程/进程组）"""
-    exp_name = f"grid_{exp_id}"
-
-    # 组装基础命令
-    if use_multi_gpu:
-        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(torch.cuda.device_count())]
-    else:
-        cmd = [sys.executable, "-u"]
+    import copy
+    config = copy.deepcopy(config)
     
-    # 添加训练脚本和基础参数
-    cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
-    
-    # 添加参数覆盖
     for k, v in (params or {}).items():
-        cmd.extend([f"--{k}", str(v)])
+        # 解析嵌套参数路径，如 "hp.batch_size" -> config["hp"]["batch_size"]
+        keys = k.split('.')
+        target = config
+        for key in keys[:-1]:
+            target = target.setdefault(key, {})
+        target[keys[-1]] = v
+    
+    return config
+
+
+def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"):
+    """运行单个实验（进程内调用方式）
+    
+    设计思路：
+    改为进程内直接调用训练函数，避免子进程启动开销和文件I/O依赖。
+    通过直接函数调用获取训练结果，提高效率和可靠性。
+    
+    Args:
+        params (dict): 实验参数覆盖
+        exp_id (str): 实验ID
+        use_multi_gpu (bool): 是否使用多GPU（暂时忽略，由Accelerator自动处理）
+        config_path (str): 配置文件路径
+        
+    Returns:
+        dict: 实验结果字典
+    """
+    exp_name = f"grid_{exp_id}"
 
     print(f"{'='*60}")
     print(f"🚀 开始实验 {exp_id}: {exp_name}")
     print(f"📋 参数: {params}")
     print(f"{'='*60}")
 
-    # 清理父环境 + 为本实验设置唯一端口
-    env = _clean_env_for_child()
-    env["MASTER_ADDR"] = env.get("MASTER_ADDR", "127.0.0.1")
-    env["MASTER_PORT"] = _unique_master_port()
-
-    # 直接继承 TTY，保留 tqdm 一行刷新
-    process = subprocess.Popen(cmd, env=env)
     try:
-        # 等待子进程结束
-        rc = process.wait()
-    except KeyboardInterrupt:
-        # 捕获到 Ctrl+C (KeyboardInterrupt)
-        print(f"捕获到中断信号(Ctrl+C)，正在终止子进程 {process.pid}...")
-        process.terminate()  # 发送 SIGTERM 信号，请求子进程终止
-        process.wait()       # 等待子进程完全退出
-        print("子进程已终止。")
-        raise                # 重新抛出异常，以确保整个网格搜索脚本停止
-
-    success = (rc == 0)
-
-    # 从文件解析结果
-    best_accuracy, final_accuracy = parse_result_from_files(exp_name)
-    
-    print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
-    
-
-    return {
-        "success": success,
-        "exp_name": exp_name,
-        "params": params,
-        "best_accuracy": best_accuracy,
-        "final_accuracy": final_accuracy,
-    }
+        # 导入训练函数
+        from src.trainers.base_trainer import run_training
+        
+        # 加载基础配置
+        config = load_grid_config(config_path)
+        
+        # 应用参数覆盖
+        config = apply_param_overrides(config, params)
+        
+        # 直接调用训练函数
+        result = run_training(config, exp_name)
+        
+        # 添加参数信息到结果中
+        result["params"] = params
+        
+        print(f"✅ 实验 {exp_name} 完成，最佳: {result['best_accuracy']:.2f}% | 最终: {result['final_accuracy']:.2f}%")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ 实验 {exp_name} 失败: {str(e)}")
+        return {
+            "success": False,
+            "exp_name": exp_name,
+            "params": params,
+            "best_accuracy": 0.0,
+            "final_accuracy": 0.0,
+            "error": str(e)
+        }
 
 
 def run_grid_search(args):

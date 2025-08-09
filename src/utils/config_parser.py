@@ -90,6 +90,7 @@ def create_base_parser(description):
     parser.add_argument("--model_name", type=str, help="模型名称")
     parser.add_argument("--exp_name", type=str, help="实验名称")
     parser.add_argument("--data_percentage", type=float, default=None, help="使用数据的百分比 (0.0-1.0)")
+    parser.add_argument("--result_file", type=str, help="结果文件路径（用于网格搜索）")
     
     # === 嵌套配置参数 ===
     # 支持点号分隔的深层配置覆盖，实现精确的配置控制
@@ -154,151 +155,92 @@ def parse_arguments(mode="grid_search"):
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # === 第4步：处理嵌套参数覆盖 ===
-    # 定义嵌套字典值设置函数，支持点号分隔的深层路径访问
+    # === 第4步：统一参数优先级处理 ===
     def set_nested_value(config_dict, key_path, value):
-        """设置嵌套字典的值，支持点号分隔的路径
-        
-        例如：set_nested_value(config, 'optimizer.params.weight_decay', 0.01)
-        将设置 config['optimizer']['params']['weight_decay'] = 0.01
-        """
+        """设置嵌套字典的值，支持点号分隔的路径"""
         keys = key_path.split('.')
         current = config_dict
-        # 逐层创建或访问嵌套字典
         for key in keys[:-1]:
             if key not in current:
                 current[key] = {}
             current = current[key]
-        # 设置最终的值
         current[keys[-1]] = value
 
-    # 应用所有命令行中的嵌套参数覆盖
-    # 只处理包含点号的参数名，这些是嵌套配置参数
-    for arg_name, arg_value in vars(args).items():
-        if arg_value is not None and '.' in arg_name:
-            set_nested_value(config, arg_name, arg_value)
-
-    # === 第5步：单实验模式的特殊处理 ===
-    # 为单个实验应用参数覆盖（用于网格搜索中的单个实验）
-    if mode == "single_experiment":
-        # 确保hp节点存在，用于存储超参数配置
+    def apply_parameter_overrides(config, args, mode):
+        """统一的参数优先级处理函数
+        
+        优先级（从低到高）：
+        1. YAML基础配置
+        2. Grid默认值（仅单实验模式）
+        3. 普通命令行参数
+        4. 嵌套命令行参数（最高优先级）
+        """
+        
+        # 确保hp节点存在
         if "hp" not in config:
             config["hp"] = {}
-        
         hp = config["hp"]
         
-        # === 5.1：从网格配置中提取默认值 ===
-        # 如果hp为空且存在grid_search配置，从grid中获取默认值
-        # 这是为了确保单实验有合理的默认参数，即使配置文件中hp节点为空
-        if not hp and "grid_search" in config and "grid" in config["grid_search"]:
-            grid = config["grid_search"]["grid"]
-            # 从grid中提取第一个值作为默认值（网格搜索的起始点）
-            # 注意：YAML中使用hp.前缀的参数需要正确提取
-            if "hp.batch_size" in grid and isinstance(grid["hp.batch_size"], list):
-                hp["batch_size"] = grid["hp.batch_size"][0]
-            if "hp.learning_rate" in grid and isinstance(grid["hp.learning_rate"], list):
-                hp["learning_rate"] = grid["hp.learning_rate"][0]
-            if "hp.epochs" in grid and isinstance(grid["hp.epochs"], list):
-                hp["epochs"] = grid["hp.epochs"][0]
-            if "hp.dropout" in grid and isinstance(grid["hp.dropout"], list):
-                hp["dropout"] = grid["hp.dropout"][0]
-            if "hp.data_percentage" in grid and isinstance(grid["hp.data_percentage"], list):
-                hp["data_percentage"] = grid["hp.data_percentage"][0]
-            # 兼容旧格式（不带hp.前缀）
-            if "batch_size" in grid and isinstance(grid["batch_size"], list):
-                hp["batch_size"] = grid["batch_size"][0]
-            if "learning_rate" in grid and isinstance(grid["learning_rate"], list):
-                hp["learning_rate"] = grid["learning_rate"][0]
-            if "epochs" in grid and isinstance(grid["epochs"], list):
-                hp["epochs"] = grid["epochs"][0]
-            if "dropout" in grid and isinstance(grid["dropout"], list):
-                hp["dropout"] = grid["dropout"][0]
-            if "data_percentage" in grid and isinstance(grid["data_percentage"], list):
-                hp["data_percentage"] = grid["data_percentage"][0]
-        
-        # === 5.2：应用命令行超参数覆盖 ===
-        # 命令行参数具有最高优先级，可以覆盖配置文件和默认值
-        if args.learning_rate is not None:
-            hp["learning_rate"] = args.learning_rate
-        if args.batch_size is not None:
-            hp["batch_size"] = args.batch_size
-        if args.epochs is not None:
-            hp["epochs"] = args.epochs
-        if args.dropout is not None:
-            hp["dropout"] = args.dropout
-        if args.data_percentage is not None:
-            hp["data_percentage"] = args.data_percentage
-            
-        # === 5.3：为其他配置节点设置默认值 ===
-        # 从网格配置中为optimizer、scheduler、loss等组件设置默认值
-        # 确保单实验模式下所有必要的配置都有合理的默认值
-        if "grid_search" in config and "grid" in config["grid_search"]:
+        # === 优先级2：Grid默认值（仅单实验模式） ===
+        if mode == "single_experiment" and "grid_search" in config and "grid" in config["grid_search"]:
             grid = config["grid_search"]["grid"]
             
-            # 设置optimizer默认值
-            # 如果配置中没有optimizer且grid中有定义，则创建默认optimizer配置
-            if "optimizer" not in config and "optimizer" in grid and "name" in grid["optimizer"]:
-                optimizer_name = grid["optimizer"]["name"][0] if isinstance(grid["optimizer"]["name"], list) else grid["optimizer"]["name"]
-                config["optimizer"] = {"name": optimizer_name, "params": {}}
-            # 确保optimizer有params节点
-            if "optimizer" in config and "weight_decay" in grid and "params" not in config["optimizer"]:
-                config["optimizer"]["params"] = {}
-            # 设置weight_decay默认值
-            if "optimizer" in config and "weight_decay" in grid and isinstance(grid["weight_decay"], list):
-                if "params" not in config["optimizer"]:
-                    config["optimizer"]["params"] = {}
-                config["optimizer"]["params"]["weight_decay"] = grid["weight_decay"][0]
-                
-            # 设置scheduler默认值
-            # 如果配置中没有scheduler且grid中有定义，则创建默认scheduler配置
-            if "scheduler" not in config and "scheduler" in grid and "name" in grid["scheduler"]:
-                scheduler_name = grid["scheduler"]["name"][0] if isinstance(grid["scheduler"]["name"], list) else grid["scheduler"]["name"]
-                config["scheduler"] = {"name": scheduler_name}
-                
-            # 设置loss默认值
-            # 如果配置中没有loss且grid中有定义，则创建默认loss配置
-            if "loss" not in config and "loss" in grid:
-                config["loss"] = {"type": grid["loss"][0] if isinstance(grid["loss"], list) else grid["loss"]}
+            # 从grid中提取默认值（如果hp中没有对应值）
+            grid_mappings = [
+                ("hp.learning_rate", "learning_rate"),
+                ("hp.batch_size", "batch_size"), 
+                ("hp.epochs", "epochs"),
+                ("hp.dropout", "dropout"),
+                ("hp.data_percentage", "data_percentage"),
+                # 兼容旧格式
+                ("learning_rate", "learning_rate"),
+                ("batch_size", "batch_size"),
+                ("epochs", "epochs"),
+                ("dropout", "dropout"),
+                ("data_percentage", "data_percentage"),
+            ]
+            
+            for grid_key, hp_key in grid_mappings:
+                if grid_key in grid and isinstance(grid[grid_key], list) and hp_key not in hp:
+                    hp[hp_key] = grid[grid_key][0]
         
-        # === 5.4：应用其他命令行参数覆盖 ===
-        # 处理模型配置
-        if args.model_name is not None:
-            if "model" not in config:
-                config["model"] = {}
-            config["model"]["name"] = args.model_name
+        # === 优先级3：普通命令行参数 ===
+        param_mappings = [
+            ("learning_rate", "learning_rate"),
+            ("batch_size", "batch_size"),
+            ("epochs", "epochs"),
+            ("dropout", "dropout"),
+            ("data_percentage", "data_percentage"),
+        ]
+        
+        for arg_name, hp_key in param_mappings:
+            arg_value = getattr(args, arg_name, None)
+            if arg_value is not None:
+                hp[hp_key] = arg_value
+        
+        # === 优先级4：嵌套命令行参数（最高优先级） ===
+        for arg_name, arg_value in vars(args).items():
+            if arg_value is not None and '.' in arg_name:
+                set_nested_value(config, arg_name, arg_value)
+        
+        # === 处理其他配置节点 ===
+        if mode == "single_experiment":
+            # 处理实验名称
+            if args.exp_name is not None:
+                if "training" not in config:
+                    config["training"] = {}
+                config["training"]["exp_name"] = args.exp_name
             
-        # 处理optimizer相关参数
-        # 处理optimizer.name参数（嵌套参数格式）
-        optimizer_name = getattr(args, 'optimizer.name', None)
-        if optimizer_name is not None:
-            if "optimizer" not in config:
-                config["optimizer"] = {"params": {}}
-            config["optimizer"]["name"] = optimizer_name
-        # 处理weight_decay参数（兼容性参数）
-        if args.weight_decay is not None:
-            if "optimizer" not in config:
-                config["optimizer"] = {"params": {}}
-            if "params" not in config["optimizer"]:
-                config["optimizer"]["params"] = {}
-            config["optimizer"]["params"]["weight_decay"] = args.weight_decay
-            
-        # 处理scheduler相关参数
-        # 处理scheduler.name参数（嵌套参数格式）
-        scheduler_name = getattr(args, 'scheduler.name', None)
-        if scheduler_name is not None:
-            if "scheduler" not in config:
-                config["scheduler"] = {}
-            config["scheduler"]["name"] = scheduler_name
-            
-        # 处理loss相关参数
-        if args.loss is not None:
-            if "loss" not in config:
-                config["loss"] = {}
-            config["loss"]["type"] = args.loss
-            
-        # 处理实验名称
-        if args.exp_name is not None:
-            config["training"]["exp_name"] = args.exp_name
+            # 处理模型配置
+            if args.model_name is not None:
+                if "model" not in config:
+                    config["model"] = {}
+                config["model"]["name"] = args.model_name
+        
+        return config
+    
+    # 应用统一的参数处理
+    config = apply_parameter_overrides(config, args, mode)
 
     # === 第6步：配置GPU环境 ===
     # 根据配置设置GPU环境，包括设备选择和分布式训练配置

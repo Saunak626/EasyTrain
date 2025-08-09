@@ -245,29 +245,10 @@ def apply_param_overrides(config, params):
     return config
 
 
-def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"):
-    """运行单个实验（进程内调用方式）
-    
-    设计思路：
-    改为进程内直接调用训练函数，避免子进程启动开销和文件I/O依赖。
-    通过直接函数调用获取训练结果，提高效率和可靠性。
-    
-    Args:
-        params (dict): 实验参数覆盖
-        exp_id (str): 实验ID
-        use_multi_gpu (bool): 是否使用多GPU（暂时忽略，由Accelerator自动处理）
-        config_path (str): 配置文件路径
-        
-    Returns:
-        dict: 实验结果字典
-    """
+def run_single_experiment_in_process(params, exp_id, config_path):
+    """进程内调用方式运行单个实验（单卡训练）"""
     exp_name = f"grid_{exp_id}"
-
-    print(f"{'='*60}")
-    print(f"🚀 开始实验 {exp_id}: {exp_name}")
-    print(f"📋 参数: {params}")
-    print(f"{'='*60}")
-
+    
     try:
         # 导入训练函数
         from src.trainers.base_trainer import run_training
@@ -284,12 +265,9 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
         # 添加参数信息到结果中
         result["params"] = params
         
-        print(f"✅ 实验 {exp_name} 完成，最佳: {result['best_accuracy']:.2f}% | 最终: {result['final_accuracy']:.2f}%")
-        
         return result
         
     except Exception as e:
-        print(f"❌ 实验 {exp_name} 失败: {str(e)}")
         return {
             "success": False,
             "exp_name": exp_name,
@@ -298,6 +276,124 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
             "final_accuracy": 0.0,
             "error": str(e)
         }
+
+
+def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path):
+    """子进程方式运行单个实验（多卡训练）"""
+    exp_name = f"grid_{exp_id}"
+    
+    # 创建临时结果文件用于进程间通信
+    temp_result_file = f"/tmp/grid_result_{exp_id}_{random.randint(1000,9999)}.json"
+    
+    # 组装命令
+    if use_multi_gpu:
+        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(torch.cuda.device_count())]
+    else:
+        cmd = [sys.executable, "-u"]
+    
+    # 添加训练脚本和基础参数
+    cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
+    cmd.extend(["--result_file", temp_result_file])  # 新增：指定结果文件
+    
+    # 添加参数覆盖
+    for k, v in (params or {}).items():
+        cmd.extend([f"--{k}", str(v)])
+
+    # 清理环境变量并设置唯一端口
+    env = os.environ.copy()
+    for k in ["LOCAL_RANK", "RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"]:
+        env.pop(k, None)
+    env["MASTER_ADDR"] = env.get("MASTER_ADDR", "127.0.0.1")
+    env["MASTER_PORT"] = str(20000 + random.randint(0, 10000))
+
+    # 启动子进程
+    process = subprocess.Popen(cmd, env=env)
+    try:
+        rc = process.wait()
+    except KeyboardInterrupt:
+        print(f"捕获到中断信号，正在终止子进程 {process.pid}...")
+        process.terminate()
+        process.wait()
+        raise
+
+    success = (rc == 0)
+    
+    # 读取结果文件
+    try:
+        if os.path.exists(temp_result_file):
+            with open(temp_result_file, 'r', encoding='utf-8') as f:
+                result = json.load(f)
+            os.remove(temp_result_file)  # 清理临时文件
+            
+            # 确保结果包含必要的字段
+            result["params"] = params
+            result["success"] = result.get("success", success)
+            result["exp_name"] = result.get("exp_name", exp_name)
+            
+            # 确保accuracy字段不为None
+            if result.get("best_accuracy") is None:
+                result["best_accuracy"] = 0.0
+            if result.get("final_accuracy") is None:
+                result["final_accuracy"] = 0.0
+                
+            return result
+        else:
+            print(f"结果文件不存在: {temp_result_file}")
+    except Exception as e:
+        print(f"读取结果文件失败: {e}")
+        if os.path.exists(temp_result_file):
+            try:
+                with open(temp_result_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                print(f"文件内容: {content[:200]}...")  # 显示前200个字符
+            except:
+                pass
+    
+    # 回退：返回默认结果
+    return {
+        "success": success,
+        "exp_name": exp_name,
+        "params": params,
+        "best_accuracy": 0.0,
+        "final_accuracy": 0.0,
+        "error": "Failed to read result file" if success else "Training process failed"
+    }
+
+
+def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"):
+    """运行单个实验（混合方式）
+    
+    设计思路：
+    - 单卡训练：使用进程内调用，高效且无需文件I/O
+    - 多卡训练：使用子进程启动，通过临时文件传递结果
+    
+    Args:
+        params (dict): 实验参数覆盖
+        exp_id (str): 实验ID
+        use_multi_gpu (bool): 是否使用多GPU
+        config_path (str): 配置文件路径
+        
+    Returns:
+        dict: 实验结果字典
+    """
+    exp_name = f"grid_{exp_id}"
+
+    print(f"{'='*60}")
+    print(f"🚀 开始实验 {exp_id}: {exp_name}")
+    print(f"📋 参数: {params}")
+    print(f"🎯 多卡训练: {'是' if use_multi_gpu else '否'}")
+    print(f"{'='*60}")
+
+    if use_multi_gpu:
+        # 多卡训练：使用子进程方式
+        result = run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
+    else:
+        # 单卡训练：使用进程内调用方式
+        result = run_single_experiment_in_process(params, exp_id, config_path)
+    
+    print(f"✅ 实验 {exp_name} 完成，最佳: {result['best_accuracy']:.2f}% | 最终: {result['final_accuracy']:.2f}%")
+    
+    return result
 
 
 def run_grid_search(args):

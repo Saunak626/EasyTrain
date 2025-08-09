@@ -22,15 +22,16 @@
 - 中断处理：优雅处理Ctrl+C中断，确保子进程正确终止
 - 配对模式：当batch_size数组与model数组长度相同时，按对应顺序配对
 """
-
-import os
-import sys
-import csv
-import yaml
-import torch
-import random
 import itertools
 import subprocess
+import yaml
+import os
+import sys
+import time
+import csv
+import json
+import random
+import torch
 
 from datetime import datetime
 
@@ -154,6 +155,66 @@ def generate_combinations(config):
     # 生成所有参数的笛卡尔积组合，并合并固定参数
     return [{**fixed, **dict(zip(keys, combo))} 
             for combo in itertools.product(*values_lists)]
+
+def parse_result_from_files(exp_name):
+    """从结构化文件中解析最终结果
+    
+    设计思路：
+    实现多层次的结果解析策略，确保在不同情况下都能获取到有效的训练结果。
+    采用优先级回退机制，提高结果解析的鲁棒性。
+    
+    解析策略：
+    1. 优先级1：result.json - 包含完整的最终结果摘要
+    2. 优先级2：metrics.jsonl - 逐行解析训练过程中的指标
+    3. 回退：返回默认值(0.0, 0.0)
+    
+    Args:
+        exp_name (str): 实验名称，用于构建结果文件路径
+        
+    Returns:
+        tuple[float, float]: (最佳准确率, 最终准确率)
+            - 最佳准确率：训练过程中达到的最高验证准确率
+            - 最终准确率：训练结束时的验证准确率
+    
+    文件格式：
+        - result.json: {"best_accuracy": float, "final_accuracy": float}
+        - metrics.jsonl: 每行一个JSON对象，包含"val_acc"字段
+    """
+    result_dir = os.path.join("runs", exp_name)
+    final_json = os.path.join(result_dir, "result.json")
+    metrics_path = os.path.join(result_dir, "metrics.jsonl")
+
+    # 优先读取 result.json
+    try:
+        if os.path.exists(final_json):
+            with open(final_json, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+                best_accuracy = float(data.get("best_accuracy", 0.0))
+                final_accuracy = float(data.get("final_accuracy", best_accuracy))
+                return best_accuracy, final_accuracy
+    except Exception:
+        pass
+
+    # 回退：扫描 metrics.jsonl
+    try:
+        if os.path.exists(metrics_path):
+            last_val, best_val = None, 0.0
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        va = json.loads(line).get("val_acc")
+                        if isinstance(va, (int, float)):
+                            last_val = float(va)
+                            best_val = max(best_val, last_val)
+                    except Exception:
+                        continue
+            if last_val is not None:
+                return best_val, last_val
+    except Exception:
+        pass
+
+    return 0.0, 0.0
+
 
 def save_results_to_csv(results, filename):
     """保存实验结果到CSV文件
@@ -304,7 +365,7 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
     env["MASTER_PORT"] = _unique_master_port()
 
     # 直接继承 TTY，保留 tqdm 一行刷新
-    process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(cmd, env=env)
     try:
         # 等待子进程结束
         rc = process.wait()
@@ -316,20 +377,10 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
         print("子进程已终止。")
         raise                # 重新抛出异常，以确保整个网格搜索脚本停止
 
-    output = process.stdout.read().decode()
     success = (rc == 0)
 
-    # 从输出解析结果
-    best_accuracy, final_accuracy = 0.0, 0.0
-    for line in output.splitlines():
-        if line.startswith("FINAL_RESULTS"):
-            parts = line.split()
-            for part in parts[1:]:
-                if part.startswith("best_accuracy:"):
-                    best_accuracy = float(part.split(':')[1])
-                elif part.startswith("final_accuracy:"):
-                    final_accuracy = float(part.split(':')[1])
-            break
+    # 从文件解析结果
+    best_accuracy, final_accuracy = parse_result_from_files(exp_name)
     
     print(f"✅ 实验 {exp_name} 完成，最佳: {best_accuracy:.2f}% | 最终: {final_accuracy:.2f}%")
     

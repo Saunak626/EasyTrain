@@ -45,30 +45,6 @@ SUPPORTED_TASKS = {
 }
 
 
-def infer_task_from_legacy_config(config):
-    """从旧配置推断任务类型，保证向后兼容性
-
-    Args:
-        config (dict): 配置字典
-
-    Returns:
-        str: 推断的任务类型
-    """
-    data_type = config.get('data', {}).get('type', 'cifar10')
-    model_name = config.get('model', {}).get('type',
-                           config.get('model', {}).get('name', 'resnet18'))
-
-    # 视频相关数据集或模型 -> 视频分类
-    video_datasets = ['ucf101', 'ucf101_video']
-    video_models = ['r3d_', 'mc3_', 'r2plus1d_', 's3d', 'mvit_', 'swin3d_']
-
-    if (data_type in video_datasets or
-        any(model_name.startswith(prefix) for prefix in video_models)):
-        return 'video_classification'
-
-    return 'image_classification'
-
-
 # JSON文件写入函数已删除，改为直接返回训练结果
 
 
@@ -250,12 +226,10 @@ def run_training(config, exp_name=None):
     task_config = config.get('task', {})
     task_tag = task_config.get('tag')
 
-    # 如果没有指定task_tag，从配置推断任务类型（向后兼容）
+    # 验证任务类型必须明确指定
     if not task_tag:
-        task_tag = infer_task_from_legacy_config(config)
-        print(f"⚠️  未指定task_tag，自动推断为: {task_tag}")
+        raise ValueError(f"必须在配置文件中明确指定task.tag。支持的任务类型: {list(SUPPORTED_TASKS.keys())}")
 
-    # 验证任务类型
     if task_tag not in SUPPORTED_TASKS:
         raise ValueError(f"不支持的任务类型: {task_tag}。支持的任务: {list(SUPPORTED_TASKS.keys())}")
 
@@ -294,7 +268,7 @@ def run_training(config, exp_name=None):
         dataset_name=dataset_type,
         data_dir=data_config.get('root', './data'),
         batch_size=hyperparams['batch_size'],
-        num_workers=data_config.get('num_workers', 4),
+        num_workers=data_config.get('num_workers', 8),
         data_percentage=hyperparams.get('data_percentage', 1.0),
         **data_config.get('params', {})
     )

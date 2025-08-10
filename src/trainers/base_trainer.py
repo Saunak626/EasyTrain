@@ -397,8 +397,6 @@ def run_training(config, exp_name=None):
             best_accuracy = val_accuracy
             tqdm.write(f"新最佳准确率: {best_accuracy:.2f}%")
 
-        # JSON文件写入已删除，只保留SwanLab记录
-
     # 结束实验追踪，保存日志和结果
     accelerator.end_training()
 

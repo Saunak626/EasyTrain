@@ -25,19 +25,19 @@ data:
 # GPU配置
 gpu:
   device_ids: "2,3"
-  auto_select: true
+  auto_select: true  # 未使用：当前代码中未实现自动GPU选择功能
 
 # 多卡训练配置
 multi_gpu:
-  enabled: true
-  strategy: "ddp"  
+  enabled: true  # 未使用：当前通过命令行参数--multi_gpu控制
+  strategy: "ddp"  # 未使用：当前固定使用DDP策略
 
 # 网格搜索设置
 max_experiments: 50
-continue_on_error: true
-parallel_jobs: 1
+continue_on_error: true  # 未使用：当前代码中未实现错误继续功能
+parallel_jobs: 1  # 未使用：当前代码中未实现并行作业功能
 save_results: true
-results_file: "grid_search_results.csv"
+results_file: "grid_search_results.csv"  # 未使用：文件名由时间戳自动生成
 
 # 网格搜索超参数
 grid_search:

@@ -1,8 +1,17 @@
+"""模型定义模块 - 未使用
+
+⚠️ 警告：此模块当前未被项目使用！
+- VideoNet3D类未被使用，项目实际使用src/models/video_net.py中的VideoNetModel
+- 如需使用此模块，请确保正确集成到训练流程中
+- 建议删除此文件或将其移至archive目录
+
+包含自定义网络模型和视频分类模型的定义。
+"""
+
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import torch.nn.functional as F
-from torch.nn.modules.module import T
 # from pytorch_video.models.timesformer import TimeSformer
 from torchvision.models.video import (mc3_18,MC3_18_Weights,
                                       mvit_v1_b, MViT_V1_B_Weights,
@@ -42,6 +51,12 @@ class MLPClassifier(nn.Module):
         x = self.softmax(x)
         return x
 class VideoNet3D(nn.Module):
+    """3D视频分类模型
+
+    支持多种预训练的3D CNN模型，包括MC3、MViT、R2Plus1D、R3D、S3D、Swin3D等。
+    注意：此类当前未被项目使用，实际使用的是src/models/video_net.py中的VideoNetModel。
+    """
+
     def __init__(self, args):
         super(VideoNet3D, self).__init__()
         if args.model_type == "mc3_18":

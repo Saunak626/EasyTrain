@@ -1,33 +1,13 @@
 """网格搜索启动脚本
 
-设计思路：
-本脚本实现了高效、稳定的超参数网格搜索，采用进程内调用的架构设计。
-核心设计原则包括：
-- 进程内调用：直接调用训练函数，避免子进程开销和文件I/O依赖
-- 内存传递：通过函数返回值直接获取训练结果，提高效率和可靠性
-- 资源管理：每个实验后自动清理GPU缓存，确保资源干净释放
-- 灵活配置：支持笛卡尔积和特殊配对模式的参数组合生成
-- 结果管理：直接收集训练结果，生成结构化的CSV报告
-
-核心功能：
-- generate_combinations: 智能参数组合生成，支持多种组合策略
-- run_single_experiment: 单实验执行器，进程内调用训练函数
-- run_grid_search: 网格搜索调度器，协调整个搜索流程
-- apply_param_overrides: 参数覆盖器，支持嵌套参数路径
-- save_results_to_csv: 结果持久化，生成便于分析的CSV报告
-
-特殊处理：
-- 异常处理：单个实验失败不影响后续实验继续执行
-- 内存管理：每个实验后清理GPU缓存，防止内存泄漏
-- 配对模式：当batch_size数组与model数组长度相同时，按对应顺序配对
-- SwanLab集成：保留SwanLab实验追踪，删除JSON文件依赖
+实现超参数网格搜索，支持进程内调用和多种参数组合策略。
+主要功能：参数组合生成、实验执行、结果收集和CSV报告生成。
 """
 import itertools
 import subprocess
 import yaml
 import os
 import sys
-import time
 import csv
 import json
 import random
@@ -47,89 +27,57 @@ def load_grid_config(path="config/grid.yaml"):
 
 
 def _as_list(v):
-    """标量→单元素列表；列表/元组原样；None→空列表
-    
-    设计思路：
-    统一参数格式处理的工具函数，确保所有参数都能以列表形式进行后续处理。
-    这种设计简化了参数组合生成的逻辑，避免了大量的类型检查代码。
-    
+    """将输入转换为列表格式
+
     Args:
         v: 任意类型的参数值
-        
+
     Returns:
         list: 统一格式化后的列表
-            - None → []
-            - 标量 → [标量]
-            - 列表/元组 → 原样返回
     """
     if v is None:
         return []
     return v if isinstance(v, (list, tuple)) else [v]
 
 def generate_combinations(config):
-    """
-    智能参数组合生成器，支持多种组合策略
-    
-    设计思路：
-    本函数实现了灵活的超参数组合生成策略，核心设计包括：
-    - 双模式支持：标准笛卡尔积模式和特殊配对模式
-    - 智能检测：自动识别batch_size与model配对的场景
-    - 参数分层：区分固定参数(fixed)和搜索参数(grid)
-    - 类型容错：自动处理标量、列表、None等不同类型
-    
-    组合策略：
-    1. 标准模式：所有参数进行笛卡尔积组合
-    2. 配对模式：当model.type数组与hp.batch_size数组长度相同时，
-       按对应位置配对，避免不合理的模型-批大小组合
-    
+    """生成参数组合列表
+
+    支持标准笛卡尔积和智能配对两种模式。
+    当model.type和hp.batch_size数组长度相同时，按位置配对。
+
     Args:
         config (dict): 网格搜索配置
-            - grid_search.grid: 搜索参数字典
-            - grid_search.fixed: 固定参数字典
-            
+
     Returns:
-        list[dict]: 参数组合列表，每个字典代表一组实验参数
-    
-    示例：
-        配对模式：model.type=["resnet", "vit"], hp.batch_size=[32, 16]
-        → 生成[("resnet", 32), ("vit", 16)]而非4种组合
+        list[dict]: 参数组合列表
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
     grid = gs.get("grid", {}) or {}
 
-    # 边界情况：无搜索参数时返回固定参数
     if not grid:
         return [fixed] if fixed else [{}]
 
-    # === 智能配对模式检测 ===
-    # 提取model.type和hp.batch_size参数列表
+    # 检测智能配对模式
     model_types = _as_list(grid.get("model.type", []))
     batch_sizes = _as_list(grid.get("hp.batch_size", []))
-    
-    # 配对模式触发条件：两个数组都有多个元素且长度相同
-    # 设计目的：避免大模型配小batch_size或小模型配大batch_size的不合理组合
-    if (len(model_types) > 1 and len(batch_sizes) > 1 and 
+
+    # 配对模式：两个数组长度相同时按位置配对
+    if (len(model_types) > 1 and len(batch_sizes) > 1 and
         len(model_types) == len(batch_sizes)):
-        
-        # 创建model-batch配对：按位置一一对应
+
         model_batch_pairs = list(zip(model_types, batch_sizes))
-        
-        # 分离其他需要搜索的参数
-        other_grid = {k: v for k, v in grid.items() 
+        other_grid = {k: v for k, v in grid.items()
                      if k not in ["model.type", "hp.batch_size"]}
-        
+
         if not other_grid:
-            # 纯配对模式：只有model和batch_size需要配对
             return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
                    for model_type, batch_size in model_batch_pairs]
         else:
-            # 混合模式：配对参数与其他参数做笛卡尔积
             other_valid_items = [(k, _as_list(v)) for k, v in other_grid.items() if _as_list(v)]
             if other_valid_items:
                 other_keys, other_values_lists = zip(*other_valid_items)
                 combinations = []
-                # 每个model-batch配对与其他参数的所有组合配对
                 for model_type, batch_size in model_batch_pairs:
                     for other_combo in itertools.product(*other_values_lists):
                         combo = {**fixed, "model.type": model_type, "hp.batch_size": batch_size}
@@ -137,54 +85,28 @@ def generate_combinations(config):
                         combinations.append(combo)
                 return combinations
             else:
-                # 其他参数为空，回退到纯配对模式
                 return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
                        for model_type, batch_size in model_batch_pairs]
-    
-    # === 标准笛卡尔积模式 ===
-    # 过滤掉空值参数，避免生成无效组合
+
+    # 标准笛卡尔积模式
     valid_items = [(k, _as_list(v)) for k, v in grid.items() if _as_list(v)]
-    
-    # 边界情况：所有参数都为空
+
     if not valid_items:
         return [fixed] if fixed else [{}]
 
-    # 分离参数名和参数值列表
     keys, values_lists = zip(*valid_items)
-
-    # 生成所有参数的笛卡尔积组合，并合并固定参数
-    return [{**fixed, **dict(zip(keys, combo))} 
+    return [{**fixed, **dict(zip(keys, combo))}
             for combo in itertools.product(*values_lists)]
-
-# parse_result_from_files 函数已删除，改为直接从训练函数获取结果
-
 
 def save_results_to_csv(results, filename):
     """保存实验结果到CSV文件
-    
-    设计思路：
-    将网格搜索的所有实验结果汇总到一个CSV文件中，便于后续分析和比较。
-    采用标准化的CSV格式，确保数据的可读性和可处理性。
-    
-    功能特性：
-    - 自动创建runs目录（如果不存在）
-    - 包含完整的超参数信息和训练结果
-    - 使用UTF-8编码，支持中文字符
-    - 自动处理嵌套参数的展平
-    
+
     Args:
-        results (list[dict]): 实验结果列表，每个字典包含：
-            - 超参数字段（如model.type, hp.batch_size等）
-            - best_accuracy: 最佳准确率
-            - final_accuracy: 最终准确率
-            - exp_name: 实验名称
-        filename (str): CSV文件名（不含路径）
-        
+        results (list[dict]): 实验结果列表
+        filename (str): CSV文件名
+
     Returns:
-        str|None: 保存的完整文件路径，如果results为空则返回None
-    
-    CSV格式：
-        包含所有超参数列和结果列，便于Excel等工具打开分析
+        str|None: 保存的文件路径
     """
     if not results:
         return None
@@ -193,7 +115,6 @@ def save_results_to_csv(results, filename):
     os.makedirs(results_dir, exist_ok=True)
     filepath = os.path.join(results_dir, filename)
 
-    # 收集所有出现过的参数字段
     param_keys = sorted({k for r in results for k in r.get("params", {}).keys()})
 
     fieldnames = [
@@ -218,16 +139,13 @@ def save_results_to_csv(results, filename):
     return filepath
 
 
-# 子进程启动辅助函数已删除，改为进程内调用方式
-
-
 def apply_param_overrides(config, params):
     """应用参数覆盖到配置字典
-    
+
     Args:
         config (dict): 基础配置字典
-        params (dict): 参数覆盖字典，支持嵌套路径如 "hp.batch_size"
-        
+        params (dict): 参数覆盖字典，支持嵌套路径
+
     Returns:
         dict: 应用覆盖后的配置字典
     """
@@ -235,7 +153,6 @@ def apply_param_overrides(config, params):
     config = copy.deepcopy(config)
     
     for k, v in (params or {}).items():
-        # 解析嵌套参数路径，如 "hp.batch_size" -> config["hp"]["batch_size"]
         keys = k.split('.')
         target = config
         for key in keys[:-1]:
@@ -361,18 +278,14 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
 
 
 def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="config/grid.yaml"):
-    """运行单个实验（混合方式）
-    
-    设计思路：
-    - 单卡训练：使用进程内调用，高效且无需文件I/O
-    - 多卡训练：使用子进程启动，通过临时文件传递结果
-    
+    """运行单个实验
+
     Args:
         params (dict): 实验参数覆盖
         exp_id (str): 实验ID
         use_multi_gpu (bool): 是否使用多GPU
         config_path (str): 配置文件路径
-        
+
     Returns:
         dict: 实验结果字典
     """
@@ -397,19 +310,15 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
 
 
 def run_grid_search(args):
-    """运行网格搜索（串行，确保资源干净释放）"""
+    """运行网格搜索"""
     config = load_grid_config(args.config)
-    
-    # 实验参数进行笛卡尔积组合
     combinations = generate_combinations(config)
 
-    # 截断实验数量
     if len(combinations) > args.max_experiments:
         combinations = combinations[:args.max_experiments]
 
     print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")
-    print(f"🎯 多卡训练: {'是' if args.multi_gpu else '否'}")
     print("=" * 60)
 
     results = []
@@ -421,15 +330,12 @@ def run_grid_search(args):
         result = run_single_experiment(
             params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
-            config_path=args.config, # 训练使用的统一配置
+            config_path=args.config,
         )
-        
+
         results.append(result)
         if result["success"]:
             successful += 1
-
-        # 适当间隔
-        # time.sleep(1.0)
 
     # 总结
     print("=" * 60)
@@ -437,7 +343,6 @@ def run_grid_search(args):
     print(f"✅ 成功实验数量: {successful}/{len(combinations)}")
 
     if successful > 0:
-        # 筛选出所有成功完成的实验结果
         successful_results = [r for r in results if r["success"]]
         # 找到“最佳准确率”最高的实验结果
         best_result = max(successful_results, key=lambda x: x["best_accuracy"])

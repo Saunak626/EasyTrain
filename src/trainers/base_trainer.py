@@ -1,25 +1,8 @@
 """
 基础训练器模块
-核心设计原则包括：
-- 统一接口：为图像和视频模型提供统一的训练接口
-- 模块解耦：将模型、损失函数、优化器、调度器等组件解耦，便于扩展和维护
-- 分布式支持：基于Accelerate库实现多GPU和分布式训练
-- 实验追踪：集成SwanLab等实验管理工具，便于实验监控和结果分析
-- 配置驱动：通过配置文件控制训练行为，支持灵活的实验设置
 
-核心功能：
-- train_epoch: 单个训练轮次的执行，包括前向传播、损失计算、反向传播
-- test_epoch: 单个测试轮次的执行，用于模型评估和验证
-- run_training: 完整训练流程的主函数，协调各个组件完成训练任务
-- write_epoch_metrics/write_final_result: 实验结果记录和持久化
-
-支持特性：
-- 多GPU训练和分布式训练
-- 图像分类和视频分类任务
-- 多种优化器、调度器和损失函数
-- 实验追踪和结果可视化
-- 灵活的数据集配置和加载
-- 自动混合精度训练
+提供统一的训练接口，支持图像和视频分类任务。
+集成Accelerate库实现多GPU训练和SwanLab实验追踪。
 """
 
 import os
@@ -49,43 +32,24 @@ from src.utils.data_utils import set_seed
 
 
 def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
-    """
-    执行单个训练轮次
-
-    设计思路：
-    - 标准的深度学习训练循环：前向传播 -> 损失计算 -> 反向传播 -> 参数更新
-    - 使用Accelerator库实现多GPU和混合精度训练的透明支持
-    - 集成进度条显示，提供训练过程的实时反馈
-    - 支持学习率调度，实现动态学习率调整策略
-    - 统计训练指标，便于监控训练效果
-
-    训练流程：
-    1. 设置模型为训练模式
-    2. 初始化训练指标和进度条
-    3. 遍历数据批次，执行训练步骤
-    4. 更新学习率调度器
-    5. 返回平均损失
+    """执行单个训练轮次
 
     Args:
-        dataloader (torch.utils.data.DataLoader): 训练数据加载器，提供批次数据
-        model (torch.nn.Module): 神经网络模型
-        loss_fn (torch.nn.Module): 损失函数，用于计算预测与真实标签的差异
-        optimizer (torch.optim.Optimizer): 优化器，用于更新模型参数
-        lr_scheduler (torch.optim.lr_scheduler._LRScheduler): 学习率调度器，动态调整学习率
-        accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU和混合精度训练
-        epoch (int): 当前训练轮次编号
+        dataloader: 训练数据加载器
+        model: 神经网络模型
+        loss_fn: 损失函数
+        optimizer: 优化器
+        lr_scheduler: 学习率调度器
+        accelerator: Accelerator实例
+        epoch: 当前轮次编号
 
     Returns:
         float: 平均训练损失
     """
-    # 设置模型为训练模式，启用dropout和batch normalization的训练行为
     model.train()
-
-    # 初始化训练指标
     total_loss = 0.0
     num_batches = 0
 
-    # 只在主进程显示进度条，避免多GPU时重复显示
     if accelerator.is_main_process:
         progress_bar = tqdm(
             total=len(dataloader),
@@ -95,30 +59,21 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
             leave=False,
         )
 
-    # 遍历训练数据的每个批次
     for batch_idx, (inputs, targets) in enumerate(dataloader):
-        # 前向传播：将输入数据通过模型得到预测结果
         outputs = model(inputs)
-        # 计算损失：比较预测结果与真实标签
         loss = loss_fn(outputs, targets)
 
-        # 反向传播：使用accelerator处理梯度计算，支持混合精度和多GPU
         accelerator.backward(loss)
-        # 更新模型参数：根据计算的梯度调整权重
         optimizer.step()
-        # 清零梯度：为下一次迭代准备
         optimizer.zero_grad()
-        # 更新学习率：根据调度策略调整学习率
         lr_scheduler.step()
 
-        # 累计损失统计
         total_loss += loss.item()
         num_batches += 1
 
-        # 记录训练指标到实验追踪系统（如SwanLab）
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
-        # 定期更新进度条显示，避免过于频繁的更新影响性能
+        # 更新进度条
         if accelerator.is_main_process and batch_idx % 10 == 0:
             current_lr = optimizer.param_groups[0]['lr']
             avg_loss = total_loss / num_batches

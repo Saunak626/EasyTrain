@@ -1,18 +1,21 @@
+# 图像分类网格搜索配置
+# 用于CIFAR-10数据集的超参数网格搜索
+
 # 任务配置
 task:
   tag: "image_classification"
-  description: "CIFAR-10图像分类任务"
+  description: "CIFAR-10图像分类网格搜索"
 
 # 训练配置
 training:
-  exp_name: "default_exp"
+  exp_name: "cifar10_grid_exp"
   save_model: true
-  model_save_path: "models/model.pth"
+  model_save_path: "models/image_model.pth"
 
 # 实验记录 SwanLab配置
 swanlab:
-  project_name: "training_framework"
-  description: "深度学习训练实验"
+  project_name: "EasyTrain-Image-Grid"
+  description: "CIFAR-10图像分类网格搜索实验"
 
 # 数据配置
 data:

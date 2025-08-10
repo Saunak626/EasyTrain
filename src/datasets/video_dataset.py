@@ -1,7 +1,12 @@
-"""UCF-101视频帧数据集
+"""视频数据集基类和UCF-101实现
 
-该模块实现了从预处理帧图像加载UCF-101数据集的功能。
-支持从train/val/test目录结构中加载数据，并将val和test合并作为测试集。
+该模块提供了视频数据集的基础接口和UCF-101的具体实现。
+支持从预处理帧图像加载数据，提供统一的视频数据集接口。
+
+Classes:
+    BaseVideoDataset: 视频数据集基类
+    VideoDataset: UCF-101视频帧数据集实现
+    CombinedVideoDataset: 合并多个数据集的包装器
 """
 
 import os
@@ -9,9 +14,58 @@ import torch
 import cv2
 import numpy as np
 from torch.utils.data import Dataset
+from abc import ABC, abstractmethod
 
 
-class VideoDataset(Dataset):
+class BaseVideoDataset(Dataset, ABC):
+    """视频数据集基类
+
+    定义了视频数据集的通用接口和基础功能。
+    所有视频数据集实现都应该继承此类。
+
+    Attributes:
+        num_classes (int): 数据集的类别数
+        clip_len (int): 每个视频片段的帧数
+        class_names (list): 类别名称列表
+    """
+
+    def __init__(self, clip_len=16):
+        """初始化基础视频数据集
+
+        Args:
+            clip_len (int): 每个视频片段的帧数，默认16
+        """
+        self.clip_len = clip_len
+        self.num_classes = None
+        self.class_names = []
+
+    @abstractmethod
+    def __len__(self):
+        """返回数据集大小"""
+        pass
+
+    @abstractmethod
+    def __getitem__(self, index):
+        """获取数据项
+
+        Args:
+            index (int): 数据索引
+
+        Returns:
+            tuple: (video_tensor, label) 其中video_tensor形状为(C, T, H, W)
+        """
+        pass
+
+    def get_num_classes(self):
+        """获取类别数"""
+        return self.num_classes
+
+    def get_class_names(self):
+        """获取类别名称列表"""
+        return self.class_names
+
+
+class VideoDataset(BaseVideoDataset):
     """UCF-101视频帧数据集类
     
     从预处理的帧图像中加载UCF-101数据集，支持train/val/test目录结构。
@@ -22,10 +76,10 @@ class VideoDataset(Dataset):
         clip_len (int): 每个视频片段的帧数
     """
     
-    def __init__(self, dataset_path, images_path, clip_len):
+    def __init__(self, dataset_path, images_path, clip_len=16):
+        super().__init__(clip_len)
         self.dataset_path = dataset_path  # 数据集的地址
         self.split = images_path  # 训练集，测试集，验证集的名字
-        self.clip_len = clip_len  # 生成数据的深度的值
 
         # 后续数据预处理的值
         self.resize_height = 128
@@ -35,10 +89,11 @@ class VideoDataset(Dataset):
         # 直接从目录结构创建标签映射
         folder = os.path.join(self.dataset_path, images_path)
         class_names = sorted(os.listdir(folder))
-        
+
         # 创建类别名到索引的映射
         self.label_map = {class_name: idx for idx, class_name in enumerate(class_names)}
         self.class_names = class_names
+        self.num_classes = len(class_names)
         
         # 收集所有样本文件路径和标签
         self.fnames, labels = [], []

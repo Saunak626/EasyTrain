@@ -112,50 +112,30 @@ def create_base_parser(description):
 
 
 def parse_arguments(mode="grid_search"):
-    """
-    统一的参数解析函数，处理命令行参数和配置文件（统一网格搜索模式）
-    
-    设计思路：
-    - 双模式支持：支持网格搜索调度器模式和单实验执行模式
-    - 配置融合：将YAML配置文件和命令行参数智能融合，实现灵活的配置管理
-    - 嵌套参数处理：支持点号分隔的嵌套参数，可以精确覆盖配置文件中的任意层级
-    - 默认值回退：为单实验模式提供从网格配置中提取默认值的机制
-    - 参数标准化：统一处理不同格式的参数，确保配置的一致性
-    
-    处理流程：
-    1. 根据模式创建对应的参数解析器
-    2. 解析命令行参数
-    3. 加载YAML配置文件
-    4. 处理嵌套参数覆盖
-    5. 为单实验模式设置默认值和参数覆盖
-    6. 配置GPU环境
-    
+    """解析命令行参数和YAML配置文件，支持参数覆盖
+
+    支持网格搜索和单实验两种模式，将命令行参数与配置文件融合。
+
     Args:
-        mode (str, optional): 运行模式
-            - 'grid_search': 网格搜索调度器模式，用于启动多个实验
-            - 'single_experiment': 单实验模式，用于执行具体的训练任务
-        
+        mode (str): 运行模式，'grid_search' 或 'single_experiment'
+
     Returns:
-        tuple: (args, config) 
-            - args: 解析后的命令行参数对象
-            - config: 融合后的完整配置字典，包含所有训练所需的配置信息
+        tuple: (args, config) 命令行参数和融合后的配置字典
     """
-    # === 第1步：创建参数解析器 ===
-    # 根据运行模式选择合适的解析器描述
+    # 创建参数解析器
     if mode == "single_experiment":
-        parser = create_base_parser("单个实验训练（网格搜索中的一个实验）")
+        parser = create_base_parser("单个实验训练")
     else:  # grid_search
         parser = create_base_parser("网格搜索训练")
 
-    # === 第2步：解析命令行参数 ===
+    # 解析命令行参数
     args = parser.parse_args()
 
-    # === 第3步：加载YAML配置文件 ===
-    # 从指定路径加载配置文件，作为基础配置
+    # 加载YAML配置文件
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # === 第4步：统一参数优先级处理 ===
+    # 参数处理辅助函数
     def set_nested_value(config_dict, key_path, value):
         """设置嵌套字典的值，支持点号分隔的路径"""
         keys = key_path.split('.')
@@ -167,25 +147,17 @@ def parse_arguments(mode="grid_search"):
         current[keys[-1]] = value
 
     def apply_parameter_overrides(config, args, mode):
-        """统一的参数优先级处理函数
-        
-        优先级（从低到高）：
-        1. YAML基础配置
-        2. Grid默认值（仅单实验模式）
-        3. 普通命令行参数
-        4. 嵌套命令行参数（最高优先级）
-        """
+        """应用命令行参数覆盖配置文件设置"""
         
         # 确保hp节点存在
         if "hp" not in config:
             config["hp"] = {}
         hp = config["hp"]
         
-        # === 优先级2：Grid默认值（仅单实验模式） ===
+        # 单实验模式：从网格配置中提取默认值
         if mode == "single_experiment" and "grid_search" in config and "grid" in config["grid_search"]:
             grid = config["grid_search"]["grid"]
-            
-            # 从grid中提取默认值（如果hp中没有对应值）
+
             grid_mappings = [
                 ("hp.learning_rate", "learning_rate"),
                 ("hp.batch_size", "batch_size"), 
@@ -204,7 +176,7 @@ def parse_arguments(mode="grid_search"):
                 if grid_key in grid and isinstance(grid[grid_key], list) and hp_key not in hp:
                     hp[hp_key] = grid[grid_key][0]
         
-        # === 优先级3：普通命令行参数 ===
+        # 应用命令行参数覆盖
         param_mappings = [
             ("learning_rate", "learning_rate"),
             ("batch_size", "batch_size"),
@@ -218,12 +190,12 @@ def parse_arguments(mode="grid_search"):
             if arg_value is not None:
                 hp[hp_key] = arg_value
         
-        # === 优先级4：嵌套命令行参数（最高优先级） ===
+        # 处理嵌套参数（点号分隔）
         for arg_name, arg_value in vars(args).items():
             if arg_value is not None and '.' in arg_name:
                 set_nested_value(config, arg_name, arg_value)
-        
-        # === 处理其他配置节点 ===
+
+        # 处理其他配置
         if mode == "single_experiment":
             # 处理实验名称
             if args.exp_name is not None:
@@ -242,13 +214,9 @@ def parse_arguments(mode="grid_search"):
     # 应用统一的参数处理
     config = apply_parameter_overrides(config, args, mode)
 
-    # === 第6步：配置GPU环境 ===
-    # 根据配置设置GPU环境，包括设备选择和分布式训练配置
+    # 配置GPU环境
     setup_gpu_config(config)
-    
-    # === 返回融合后的配置 ===
-    # 返回解析后的命令行参数和完整的配置字典
-    # config包含了所有训练所需的配置信息，已经过参数覆盖和默认值设置
+
     return args, config
 
 

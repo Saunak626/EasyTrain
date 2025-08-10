@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import timm
 from torchvision import models
+from .model_registry import create_model_unified, validate_model_for_task
 
 
 class ImageNetModel(nn.Module):
@@ -73,13 +74,19 @@ class ImageNetModel(nn.Module):
 def get_model(model_name='resnet18', **kwargs):
     """
     模型工厂函数，创建预训练图像分类模型实例
-    
+
     Args:
-        model_name (str, optional): 模型名称，支持'resnet18', 'resnet50', 
+        model_name (str, optional): 模型名称，支持'resnet18', 'resnet50',
             'efficientnet_b0', 'mobilenet_v2', 'densenet121'等，默认为'resnet18'
-        **kwargs: 传递给ImageNetModel的其他参数，如num_classes, pretrained等
-        
+        **kwargs: 传递给模型的其他参数，如num_classes, pretrained等
+
     Returns:
-        ImageNetModel: 配置好的模型实例
+        torch.nn.Module: 配置好的模型实例
     """
-    return ImageNetModel(model_name=model_name, **kwargs)
+    # 验证模型是否适用于图像分类任务
+    if not validate_model_for_task(model_name, 'image_classification'):
+        # 如果验证失败，回退到原有实现
+        return ImageNetModel(model_name=model_name, **kwargs)
+
+    # 使用统一的模型创建接口
+    return create_model_unified(model_name, **kwargs)

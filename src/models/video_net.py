@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision import models
+from .model_registry import create_model_unified, validate_model_for_task
 
 
 class VideoNetModel(nn.Module):
@@ -88,32 +89,24 @@ class VideoNetModel(nn.Module):
 def get_video_model(model_name, num_classes=101, **kwargs):
     """
     视频模型工厂函数
-    
+
     Args:
         model_name: 模型名称
         num_classes: 分类类别数
         **kwargs: 其他模型参数
-    
+
     Returns:
-        VideoNetModel实例
+        torch.nn.Module: 配置好的视频模型实例
     """
-    # 从kwargs中提取参数
-    pretrained = kwargs.get('pretrained', True)
-    
-    # 支持的视频模型列表
-    supported_models = [
-        'r3d_18', 'mc3_18', 'r2plus1d_18', 's3d',
-        'mvit_v1_b', 'mvit_v2_s', 
-        'swin3d_b', 'swin3d_s', 'swin3d_t'
-    ]
-    
-    if model_name not in supported_models:
-        raise ValueError(f"不支持的视频模型: {model_name}. 支持的模型: {supported_models}")
-    
-    model = VideoNetModel(
-        model_name=model_name,
-        num_classes=num_classes,
-        pretrained=pretrained
-    )
-    
-    return model
+    # 验证模型是否适用于视频分类任务
+    if not validate_model_for_task(model_name, 'video_classification'):
+        # 如果验证失败，回退到原有实现
+        pretrained = kwargs.get('pretrained', True)
+        return VideoNetModel(
+            model_name=model_name,
+            num_classes=num_classes,
+            pretrained=pretrained
+        )
+
+    # 使用统一的模型创建接口
+    return create_model_unified(model_name, num_classes=num_classes, **kwargs)

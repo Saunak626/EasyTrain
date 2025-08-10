@@ -11,8 +11,6 @@ import sys
 import csv
 import json
 import random
-import torch
-
 from datetime import datetime
 
 # 添加项目根目录到路径
@@ -204,6 +202,7 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
     
     # 组装命令
     if use_multi_gpu:
+        import torch  # 局部导入，仅在需要时使用
         cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(torch.cuda.device_count())]
     else:
         cmd = [sys.executable, "-u"]

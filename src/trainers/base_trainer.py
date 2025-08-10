@@ -26,6 +26,7 @@ from src.optimizers.optim import get_optimizer                 # 优化器工厂
 from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
+from src.utils.config_utils import extract_component_config    # 统一配置提取工具
 
 
 # 支持的任务类型配置
@@ -295,26 +296,21 @@ def run_training(config, exp_name=None):
         **model_params
     )
 
-    # 创建损失函数
-    loss_config = config.get('loss', {})
-    loss_fn = get_loss_function(
-        loss_config.get('name', 'crossentropy'),
-        **loss_config.get('params', {})
-    )
+    # 创建损失函数 - 使用统一的参数提取
+    loss_name, loss_params = extract_component_config(config, 'loss', 'crossentropy')
+    loss_fn = get_loss_function(loss_name, **loss_params)
 
-    # 创建优化器
-    optimizer_config = config.get('optimizer', {})
+    # 创建优化器 - 使用统一的参数提取
+    optimizer_name, optimizer_params = extract_component_config(config, 'optimizer', 'adam')
     optimizer = get_optimizer(
         model,
-        optimizer_config.get('name', 'adam'),
+        optimizer_name,
         hyperparams['learning_rate'],
-        **optimizer_config.get('params', {})
+        **optimizer_params
     )
 
-    # 创建学习率调度器
-    scheduler_config = config.get('scheduler', {})
-    scheduler_name = scheduler_config.get('name', 'onecycle')
-    scheduler_params = scheduler_config.get('params', {})
+    # 创建学习率调度器 - 使用统一的参数提取
+    scheduler_name, scheduler_params = extract_component_config(config, 'scheduler', 'onecycle')
     
     # 根据调度器类型设置默认参数
     if scheduler_name == 'onecycle':

@@ -8,7 +8,6 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
-from .ucf101_dataset import UCF101Dataset
 from .video_dataset import VideoDataset, CombinedVideoDataset
 
 
@@ -57,49 +56,22 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
         train_dataset, test_dataset = custom_dataset.get_datasets()
         num_classes = custom_dataset.num_classes
 
-    elif dataset_name == "ucf101":
-        # 创建UCF-101视频数据集（实时抽帧）
-        annotation_path = kwargs.get('annotation_path', os.path.join(data_dir, 'ucfTrainTestlist'))
-        frames_per_clip = kwargs.get('frames_per_clip', 16)
-        step_between_clips = kwargs.get('step_between_clips', 4)
-        fold = kwargs.get('fold', 1)
-        
-        train_dataset = UCF101Dataset(
-            root=data_dir,
-            annotation_path=annotation_path,
-            frames_per_clip=frames_per_clip,
-            step_between_clips=step_between_clips,
-            fold=fold,
-            train=True
-        )
-        
-        test_dataset = UCF101Dataset(
-            root=data_dir,
-            annotation_path=annotation_path,
-            frames_per_clip=frames_per_clip,
-            step_between_clips=step_between_clips,
-            fold=fold,
-            train=False
-        )
-        
-        num_classes = train_dataset.num_classes
+    elif dataset_name in ["ucf101", "ucf101_video"]:
+        # 统一使用VideoDataset处理UCF-101视频数据（从预处理帧图像加载）
+        clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))  # 兼容两种参数名
 
-    elif dataset_name == "ucf101_video":
-        # 创建UCF-101视频帧数据集（从预处理帧图像加载）
-        clip_len = kwargs.get('clip_len', 16)
-        
         train_dataset = VideoDataset(
             dataset_path=data_dir,
             images_path='train',
             clip_len=clip_len
         )
-        
+
         # 将val和test合并作为测试集
         test_dataset = CombinedVideoDataset(
             dataset_path=data_dir,
             clip_len=clip_len
         )
-        
+
         num_classes = 101  # UCF-101固定为101个类别
 
     else:
@@ -165,14 +137,7 @@ def get_dataset_info(dataset_name):
             "input_size": (3, 224, 224),  # 默认大小
             "classes": None  # 需要运行时确定
         }
-    elif dataset_name == "ucf101":
-        return {
-            "name": "UCF-101",
-            "num_classes": 101,
-            "input_size": (3, 16, 112, 112),  # (C, T, H, W)
-            "classes": None  # 需要运行时确定
-        }
-    elif dataset_name == "ucf101_video":
+    elif dataset_name in ["ucf101", "ucf101_video"]:
         return {
             "name": "UCF-101 Video",
             "num_classes": 101,

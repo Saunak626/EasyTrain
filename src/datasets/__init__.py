@@ -22,7 +22,7 @@
 
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
-from .ucf101_dataset import UCF101Dataset
+from .video_dataset import VideoDataset, CombinedVideoDataset
 from .dataloader_factory import create_dataloaders, get_dataset_info
 
-__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'UCF101Dataset', 'create_dataloaders', 'get_dataset_info']
+__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'VideoDataset', 'CombinedVideoDataset', 'create_dataloaders', 'get_dataset_info']

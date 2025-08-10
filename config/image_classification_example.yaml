@@ -1,0 +1,69 @@
+# 图像分类任务配置示例
+# 展示如何配置基于task_tag的图像分类任务
+
+# 任务配置 - 新增字段
+task:
+  tag: "image_classification"  # 任务类型标识
+  description: "CIFAR-10图像分类示例"  # 任务描述
+
+# 训练配置
+training:
+  exp_name: "cifar10_resnet18_example"
+  save_model: true
+  model_save_path: "models/image_model.pth"
+
+# SwanLab实验追踪配置
+swanlab:
+  project_name: "EasyTrain-Image-Classification"
+  description: "图像分类任务示例"
+
+# 数据集配置
+data:
+  type: "cifar10"  # 支持: cifar10, custom
+  root: "./data"
+  download: true
+  augment: true
+  num_workers: 8
+
+# 模型配置
+model:
+  type: "resnet18"  # 支持: resnet18, resnet50, efficientnet_b0, mobilenet_v2, densenet121
+  params:
+    pretrained: true
+    num_classes: 10  # 将被数据集信息自动覆盖
+
+# 超参数配置
+hp:
+  batch_size: 128
+  learning_rate: 0.001
+  epochs: 10
+  dropout: 0.1
+
+# 优化器配置
+optimizer:
+  name: "adam"
+  params:
+    weight_decay: 0.0001
+
+# 学习率调度器配置
+scheduler:
+  name: "cosine"
+  params:
+    T_max: 10
+    eta_min: 0.00001
+
+# 损失函数配置
+loss:
+  name: "crossentropy"
+  params:
+    label_smoothing: 0.1
+
+# GPU配置
+gpu:
+  device_ids: "0"
+  auto_select: true
+
+# 多卡训练配置
+multi_gpu:
+  enabled: false
+  strategy: "ddp"

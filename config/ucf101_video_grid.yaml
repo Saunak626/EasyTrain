@@ -1,6 +1,11 @@
 # UCF-101视频分类网格搜索配置
 # 用于搜索最佳的视频模型和超参数组合
 
+# 任务配置
+task:
+  tag: "video_classification"
+  description: "UCF-101视频分类网格搜索"
+
 # 训练配置
 training:
   exp_name: "ucf101_grid_exp"

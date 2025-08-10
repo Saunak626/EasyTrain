@@ -1,3 +1,8 @@
+# 任务配置
+task:
+  tag: "image_classification"
+  description: "CIFAR-10图像分类任务"
+
 # 训练配置
 training:
   exp_name: "default_exp"

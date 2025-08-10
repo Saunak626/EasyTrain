@@ -1,6 +1,11 @@
 # UCF-101视频分类配置文件
 # 基于grid.yaml的视频分类任务配置
 
+# 任务配置
+task:
+  tag: "video_classification"
+  description: "UCF-101视频分类基线实验"
+
 # 训练配置
 training:
   exp_name: "ucf101_baseline"

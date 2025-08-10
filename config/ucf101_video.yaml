@@ -1,6 +1,11 @@
 # UCF-101视频帧数据集训练配置
 # 使用预处理的帧图像进行训练，将val和test合并作为测试集
 
+# 任务配置
+task:
+  tag: "video_classification"
+  description: "UCF-101视频分类任务"
+
 # 训练配置
 training:
   exp_name: ucf101_video_r3d18 # 实验名称

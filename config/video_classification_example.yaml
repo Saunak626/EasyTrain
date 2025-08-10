@@ -1,0 +1,69 @@
+# 视频分类任务配置示例
+# 展示如何配置基于task_tag的视频分类任务
+
+# 任务配置 - 新增字段
+task:
+  tag: "video_classification"  # 任务类型标识
+  description: "UCF-101视频分类示例"  # 任务描述
+
+# 训练配置
+training:
+  exp_name: "ucf101_r3d18_example"
+  save_model: true
+  model_save_path: "models/video_model.pth"
+
+# SwanLab实验追踪配置
+swanlab:
+  project_name: "EasyTrain-Video-Classification"
+  description: "视频分类任务示例"
+
+# 数据集配置
+data:
+  type: "ucf101_video"  # 支持: ucf101, ucf101_video
+  root: "data/ucf101"
+  num_workers: 12
+  params:
+    clip_len: 16  # 每个视频片段的帧数
+
+# 模型配置
+model:
+  type: "r3d_18"  # 支持: r3d_18, mc3_18, r2plus1d_18, s3d, mvit_v1_b, mvit_v2_s, swin3d_b, swin3d_s, swin3d_t
+  params:
+    pretrained: true
+    num_classes: 101  # 将被数据集信息自动覆盖
+
+# 超参数配置
+hp:
+  batch_size: 32  # 视频模型通常需要较小的batch_size
+  learning_rate: 0.001
+  epochs: 10
+  dropout: 0.2
+
+# 优化器配置
+optimizer:
+  name: "adam"
+  params:
+    weight_decay: 0.0001
+
+# 学习率调度器配置
+scheduler:
+  name: "cosine"
+  params:
+    T_max: 10
+    eta_min: 0.00001
+
+# 损失函数配置
+loss:
+  name: "crossentropy"
+  params:
+    label_smoothing: 0.1
+
+# GPU配置
+gpu:
+  device_ids: "0,1"
+  auto_select: true
+
+# 多卡训练配置
+multi_gpu:
+  enabled: true
+  strategy: "ddp"

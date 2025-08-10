@@ -28,6 +28,47 @@ from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加
 from src.utils.data_utils import set_seed
 
 
+# 支持的任务类型配置
+SUPPORTED_TASKS = {
+    'image_classification': {
+        'description': '图像分类任务',
+        'supported_datasets': ['cifar10', 'custom'],
+        'model_factory': 'get_model',
+        'default_model': 'resnet18'
+    },
+    'video_classification': {
+        'description': '视频分类任务',
+        'supported_datasets': ['ucf101', 'ucf101_video'],
+        'model_factory': 'get_video_model',
+        'default_model': 'r3d_18'
+    }
+}
+
+
+def infer_task_from_legacy_config(config):
+    """从旧配置推断任务类型，保证向后兼容性
+
+    Args:
+        config (dict): 配置字典
+
+    Returns:
+        str: 推断的任务类型
+    """
+    data_type = config.get('data', {}).get('type', 'cifar10')
+    model_name = config.get('model', {}).get('type',
+                           config.get('model', {}).get('name', 'resnet18'))
+
+    # 视频相关数据集或模型 -> 视频分类
+    video_datasets = ['ucf101', 'ucf101_video']
+    video_models = ['r3d_', 'mc3_', 'r2plus1d_', 's3d', 'mvit_', 'swin3d_']
+
+    if (data_type in video_datasets or
+        any(model_name.startswith(prefix) for prefix in video_models)):
+        return 'video_classification'
+
+    return 'image_classification'
+
+
 # JSON文件写入函数已删除，改为直接返回训练结果
 
 
@@ -205,12 +246,36 @@ def run_training(config, exp_name=None):
     if exp_name is None:
         exp_name = config['training']['exp_name']
 
+    # === 第1步：解析任务配置 ===
+    task_config = config.get('task', {})
+    task_tag = task_config.get('tag')
+
+    # 如果没有指定task_tag，从配置推断任务类型（向后兼容）
+    if not task_tag:
+        task_tag = infer_task_from_legacy_config(config)
+        print(f"⚠️  未指定task_tag，自动推断为: {task_tag}")
+
+    # 验证任务类型
+    if task_tag not in SUPPORTED_TASKS:
+        raise ValueError(f"不支持的任务类型: {task_tag}。支持的任务: {list(SUPPORTED_TASKS.keys())}")
+
+    task_info = SUPPORTED_TASKS[task_tag]
+
+    # === 第2步：解析和验证数据配置 ===
+    data_config = config.get('data', {})
+    dataset_type = data_config.get('type', 'cifar10')
+
+    # 验证数据集与任务的兼容性
+    if dataset_type not in task_info['supported_datasets']:
+        raise ValueError(f"任务 '{task_tag}' 不支持数据集 '{dataset_type}'。"
+                        f"支持的数据集: {task_info['supported_datasets']}")
+
     # 初始化Accelerator，指定swanlab为日志记录工具
     accelerator = Accelerator(log_with="swanlab")
 
     # 记录到SwanLab的超参数
     hyperparams = config['hp']
-    tracker_config = {**hyperparams, "exp_name": exp_name}
+    tracker_config = {**hyperparams, "exp_name": exp_name, "task_tag": task_tag}
 
     # 初始化SwanLab实验追踪器
     accelerator.init_trackers(
@@ -224,10 +289,6 @@ def run_training(config, exp_name=None):
         }
     )
 
-    # 解析数据配置
-    data_config = config.get('data', {})
-    dataset_type = data_config.get('type', 'cifar10')
-
     # 使用简化的数据加载器创建函数
     train_dataloader, test_dataloader, num_classes = create_dataloaders(
         dataset_name=dataset_type,
@@ -238,34 +299,27 @@ def run_training(config, exp_name=None):
         **data_config.get('params', {})
     )
     
-    # 获取数据集信息
+    # === 第3步：获取数据集信息 ===
     dataset_info = get_dataset_info(dataset_type)
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
-    # 解析模型配置
+    # === 第4步：基于任务类型创建模型 ===
     model_config = config.get('model', {})
-    model_name = model_config.get('type', model_config.get('name', 'resnet18'))
+    model_name = model_config.get('type',
+                                 model_config.get('name', task_info['default_model']))
 
-    # 根据模型类型选择对应的工厂函数
-    video_model_prefixes = ['r3d_', 'mc3_', 'r2plus1d_', 's3d']
-    is_video_model = any(model_name.startswith(prefix) for prefix in video_model_prefixes)
-    
-    if is_video_model:
-        # 使用视频模型工厂函数
-        video_params = model_config.get('params', {}).copy()
-        # 确保使用数据集的实际类别数
-        video_params['num_classes'] = dataset_info['num_classes']
-        model = get_video_model(
-            model_name=model_name,
-            **video_params
-        )
-    else:
-        # 使用图像模型工厂函数
-        model = get_model(
-            model_name=model_name,
-            num_classes=dataset_info['num_classes'],
-            **model_config.get('params', {})
-        )
+    # 使用任务驱动的模型工厂选择
+    model_factory_name = task_info['model_factory']
+    model_factory = globals()[model_factory_name]
+
+    # 统一的模型创建逻辑
+    model_params = model_config.get('params', {}).copy()
+    model_params['num_classes'] = dataset_info['num_classes']
+
+    model = model_factory(
+        model_name=model_name,
+        **model_params
+    )
 
     # 创建损失函数
     loss_config = config.get('loss', {})
@@ -316,6 +370,7 @@ def run_training(config, exp_name=None):
     # 打印训练配置信息（仅在主进程）
     if accelerator.is_main_process:
         print(f"========== 训练实验: {exp_name} ==========")
+        print(f"  任务类型: {task_tag} ({task_info['description']})")
         print(f"  数据集: {dataset_type}")
         print(f"  模型: {model_name}")
         print(f"  参数: {hyperparams}")

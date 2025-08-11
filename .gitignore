@@ -8,6 +8,6 @@ commit/
 swanlog/
 runs/
 
-
+# 无用文件
 *.pyc
-
+*.md

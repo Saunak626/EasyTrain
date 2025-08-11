@@ -76,12 +76,16 @@ class VideoDataset(BaseVideoDataset):
         clip_len (int): 每个视频片段的帧数
     """
     
-    def __init__(self, dataset_path, images_path, clip_len=16):
+    def __init__(self, dataset_path, images_path, clip_len=16, model_type=None):
         super().__init__(clip_len)
         self.dataset_path = dataset_path  # 数据集的地址
         self.split = images_path  # 训练集，测试集，验证集的名字
+        self.model_type = model_type  # 模型类型，用于获取对应的transforms
 
-        # 后续数据预处理的值
+        # 获取模型特定的transforms
+        self.model_transforms = self._get_model_transforms()
+
+        # 保留传统预处理参数作为fallback（向后兼容）
         self.resize_height = 128
         self.resize_width = 171
         self.crop_size = 112
@@ -113,6 +117,35 @@ class VideoDataset(BaseVideoDataset):
 
         self.label_array = np.array(labels, dtype=int)
 
+    def _get_model_transforms(self):
+        """获取模型特定的transforms（增强版）"""
+        if self.model_type:
+            try:
+                from ..models.model_registry import get_video_model_transforms, validate_model_transforms_compatibility
+
+                # 获取transforms
+                transforms = get_video_model_transforms(self.model_type)
+                if transforms is None:
+                    return None
+
+                # 验证兼容性
+                is_compatible, message = validate_model_transforms_compatibility(self.model_type, verbose=False)
+                if not is_compatible:
+                    print(f"警告: {self.model_type} transforms不兼容: {message}，回退到传统预处理")
+                    return None
+
+                return transforms
+
+            except ImportError:
+                # 如果导入失败，使用传统方式
+                pass
+        return None
+
+    def set_model_type(self, model_type):
+        """设置模型类型并更新transforms（用于网格搜索）"""
+        self.model_type = model_type
+        self.model_transforms = self._get_model_transforms()
+
     def __len__(self):
         return len(self.fnames)
 
@@ -120,18 +153,40 @@ class VideoDataset(BaseVideoDataset):
         # 加载对应类别的动作数据集，并转化为（帧数， 高， 宽， 3通道）
         buffer = self.load_frames(self.fnames[index])
 
-        # 原始视频分辨率约为3:4 (128*171)
-        # 在数据的深度，高度，宽度方向进行随机裁剪，将数据数据转化为（clip_len， 112, 112， 3）
-        buffer = self.crop(buffer, self.clip_len, self.crop_size)
+        # 如果有模型特定的transforms，使用官方transforms
+        if self.model_transforms is not None:
+            # 简单的时间维度采样，保持原始空间尺寸
+            if buffer.shape[0] > self.clip_len:
+                # 随机选择起始帧
+                start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
+                buffer = buffer[start_idx:start_idx + self.clip_len]
+            elif buffer.shape[0] < self.clip_len:
+                # 重复最后一帧
+                last_frame = buffer[-1]
+                pad_size = self.clip_len - buffer.shape[0]
+                padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
+                buffer = np.concatenate([buffer, padding], axis=0)
 
-        buffer = self.normalize(buffer)  # 对模型进行归一化处理
-        buffer = self.to_tensor(buffer)  # 对维度进行转化
+            # 转换为torch tensor格式: (T, H, W, C) -> (T, C, H, W)
+            buffer = torch.from_numpy(buffer).float() / 255.0
+            buffer = buffer.permute(0, 3, 1, 2)  # (T, H, W, C) -> (T, C, H, W)
+
+            # 应用模型特定的官方transforms (输入: T, C, H, W -> 输出: C, T, H, W)
+            buffer = self.model_transforms(buffer)
+        else:
+            # 使用传统的预处理方式（向后兼容）
+            # 原始视频分辨率约为3:4 (128*171)
+            # 在数据的深度，高度，宽度方向进行随机裁剪，将数据数据转化为（clip_len， 112, 112， 3）
+            buffer = self.crop(buffer, self.clip_len, self.crop_size)
+            buffer = self.normalize(buffer)  # 对模型进行归一化处理
+            buffer = self.to_tensor(buffer)  # 对维度进行转化
+            buffer = torch.from_numpy(buffer)
 
         # 获取对应视频的标签数据
         labels = np.array(self.label_array[index])
 
         # 返回torch格式的特征和标签
-        return torch.from_numpy(buffer), torch.from_numpy(labels)
+        return buffer, torch.from_numpy(labels)
 
     def load_frames(self, file_dir):
         """从目录中加载视频帧"""
@@ -198,21 +253,27 @@ class VideoDataset(BaseVideoDataset):
 class CombinedVideoDataset(Dataset):
     """合并val和test数据集的包装类"""
     
-    def __init__(self, dataset_path, clip_len):
+    def __init__(self, dataset_path, clip_len, model_type=None):
         """初始化合并数据集
-        
+
         Args:
             dataset_path (str): 数据集根目录路径
             clip_len (int): 每个视频片段的帧数
+            model_type (str, optional): 模型类型，用于获取对应的transforms
         """
         # 创建val和test数据集
-        self.val_dataset = VideoDataset(dataset_path, 'val', clip_len)
-        self.test_dataset = VideoDataset(dataset_path, 'test', clip_len)
+        self.val_dataset = VideoDataset(dataset_path, 'val', clip_len, model_type)
+        self.test_dataset = VideoDataset(dataset_path, 'test', clip_len, model_type)
         
         # 计算总长度
         self.val_len = len(self.val_dataset)
         self.test_len = len(self.test_dataset)
         self.total_len = self.val_len + self.test_len
+
+    def set_model_type(self, model_type):
+        """设置模型类型并更新transforms（用于网格搜索）"""
+        self.val_dataset.set_model_type(model_type)
+        self.test_dataset.set_model_type(model_type)
     
     def __len__(self):
         return self.total_len

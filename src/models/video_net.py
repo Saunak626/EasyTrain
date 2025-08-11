@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision import models
-from .model_registry import create_model_unified, validate_model_for_task
+from .model_registry import validate_model_for_task
 
 
 class VideoNetModel(nn.Module):
@@ -108,5 +108,6 @@ def get_video_model(model_type, num_classes=101, **kwargs):
             pretrained=pretrained
         )
 
-    # 使用统一的模型创建接口
-    return create_model_unified(model_type, num_classes=num_classes, **kwargs)
+    # 使用带回退机制的模型创建接口
+    from .model_registry import create_model_with_fallback
+    return create_model_with_fallback(model_type, num_classes=num_classes, **kwargs)

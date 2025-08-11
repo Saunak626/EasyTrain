@@ -96,7 +96,7 @@ def create_base_parser(description):
     parser.add_argument("--max_experiments", type=int, default=50, help="最大实验数量")
     parser.add_argument("--save_results", action="store_true", default=True, help="保存结果")
     parser.add_argument("--results_file", type=str, default="grid_search_results.csv", help="结果文件名")
-    parser.add_argument("--top_n", type=int, default=3, help="显示前n名实验结果")
+    parser.add_argument("--top_n", type=int, default=10, help="显示前n名实验结果")
     
     # === 核心超参数覆盖 ===
     # 用于网格搜索中单个实验的参数覆盖，这些参数可以覆盖配置文件中的值

@@ -4,9 +4,15 @@
 支持图像分类和视频分类模型的统一管理。
 """
 
+import torch
 import torch.nn as nn
 import timm
 from torchvision import models
+from torchvision.models.video import (
+    MC3_18_Weights, R3D_18_Weights, MViT_V1_B_Weights,
+    MViT_V2_S_Weights, R2Plus1D_18_Weights, S3D_Weights,
+    Swin3D_B_Weights, Swin3D_S_Weights, Swin3D_T_Weights
+)
 
 # 模型注册表：统一管理所有支持的模型
 # 每个模型配置包含以下字段：
@@ -96,14 +102,121 @@ MODEL_REGISTRY = {
     }
 }
 
+# 视频模型transforms映射表
+# 提供每个视频模型对应的官方预训练权重transforms
+VIDEO_MODEL_TRANSFORMS_MAP = {
+    'r3d_18': R3D_18_Weights.DEFAULT,
+    'mc3_18': MC3_18_Weights.DEFAULT,
+    'r2plus1d_18': R2Plus1D_18_Weights.DEFAULT,
+    's3d': S3D_Weights.DEFAULT,
+    'mvit_v1_b': MViT_V1_B_Weights.DEFAULT,
+    'mvit_v2_s': MViT_V2_S_Weights.DEFAULT,
+    'swin3d_b': Swin3D_B_Weights.DEFAULT,
+    'swin3d_s': Swin3D_S_Weights.DEFAULT,
+    'swin3d_t': Swin3D_T_Weights.DEFAULT,
+}
 
-def create_model_unified(model_type, num_classes=10, pretrained=True, **kwargs):
+
+def debug_model_architecture(model, model_type, verbose=False):
+    """调试模型架构，输出关键信息
+
+    Args:
+        model: 模型实例
+        model_type (str): 模型类型
+        verbose (bool): 是否输出详细信息
+    """
+    if not verbose:
+        return
+
+    print(f"\n=== 调试模型架构: {model_type} ===")
+    print(f"模型类型: {type(model)}")
+
+    # 检查常见的分类头属性
+    attrs_to_check = ['fc', 'classifier', 'head', 'heads']
+    for attr in attrs_to_check:
+        if hasattr(model, attr):
+            attr_obj = getattr(model, attr)
+            print(f"✓ {attr}: {type(attr_obj)}")
+
+            # 如果是Sequential，检查内部结构
+            if isinstance(attr_obj, nn.Sequential):
+                for i, layer in enumerate(attr_obj):
+                    print(f"  [{i}]: {type(layer)}")
+        else:
+            print(f"✗ {attr}: 不存在")
+    print("=" * 40)
+
+
+def get_video_model_transforms(model_type):
+    """获取视频模型的官方transforms
+
+    Args:
+        model_type (str): 视频模型类型
+
+    Returns:
+        callable: 对应的transforms函数，如果模型不支持则返回None
+    """
+    if model_type in VIDEO_MODEL_TRANSFORMS_MAP:
+        weights = VIDEO_MODEL_TRANSFORMS_MAP[model_type]
+        return weights.transforms()
+    return None
+
+
+def validate_model_transforms_compatibility(model_type, verbose=False):
+    """验证模型transforms兼容性
+
+    Args:
+        model_type (str): 模型类型
+        verbose (bool): 是否输出详细信息
+
+    Returns:
+        tuple: (is_compatible, message)
+    """
+    try:
+        # 获取官方transforms
+        transforms = get_video_model_transforms(model_type)
+        if transforms is None:
+            return False, "无法获取官方transforms"
+
+        # 创建测试数据 (T, C, H, W)
+        test_input = torch.randn(16, 3, 224, 224)
+
+        # 测试transforms
+        try:
+            output = transforms(test_input)
+            expected_shape = (3, 16, 224, 224)  # (C, T, H, W)
+
+            if output.shape != expected_shape:
+                message = f"输出形状不匹配: 期望{expected_shape}, 实际{output.shape}"
+                if verbose:
+                    print(f"警告: {model_type} - {message}")
+                return False, message
+
+            if verbose:
+                print(f"✓ {model_type} transforms兼容性验证通过")
+            return True, "transforms兼容"
+
+        except Exception as e:
+            message = f"transforms执行失败: {str(e)}"
+            if verbose:
+                print(f"错误: {model_type} - {message}")
+            return False, message
+
+    except Exception as e:
+        message = f"验证过程失败: {str(e)}"
+        if verbose:
+            print(f"错误: {model_type} - {message}")
+        return False, message
+
+
+def create_model_unified(model_type, num_classes=10, pretrained=True, debug=False, **kwargs):
     """统一的模型创建接口
 
     Args:
         model_type (str): 模型类型
         num_classes (int): 分类类别数
         pretrained (bool): 是否使用预训练权重
+        debug (bool): 是否启用调试模式
         **kwargs: 其他模型参数
 
     Returns:
@@ -152,28 +265,105 @@ def create_model_unified(model_type, num_classes=10, pretrained=True, **kwargs):
         model_func = getattr(models.video, config['model_func'])
         model = model_func(weights=weights)
         
-        # 修改分类头以适应目标类别数
-        if hasattr(model, 'fc'):
-            # 大多数视频模型使用fc作为分类头
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, num_classes)
-        elif hasattr(model, 'head'):
-            # 一些Transformer模型使用head作为分类头
-            if hasattr(model.head, 'proj'):
-                # MViT等模型的head包含proj层
-                in_features = model.head.proj.in_features
-                model.head.proj = nn.Linear(in_features, num_classes)
+        # 修改分类头以适应目标类别数 - 根据不同模型架构进行精确适配
+        if model_type in ['r3d_18', 'mc3_18', 'r2plus1d_18']:
+            # ResNet3D系列模型 - 使用fc层
+            if hasattr(model, 'fc') and isinstance(model.fc, nn.Linear):
+                in_features = model.fc.in_features
+                model.fc = nn.Linear(in_features, num_classes)
             else:
-                # 简单的head结构
+                raise ValueError(f"ResNet3D模型 {model_type} 的fc层结构异常: {type(getattr(model, 'fc', None))}")
+
+        elif model_type == 's3d':
+            # S3D模型 - 使用classifier Sequential，最后一层是Conv3d
+            if hasattr(model, 'classifier') and isinstance(model.classifier, nn.Sequential):
+                # classifier是Sequential: [Dropout, Conv3d]
+                conv_layer = model.classifier[-1]  # 最后一层Conv3d
+                if isinstance(conv_layer, nn.Conv3d):
+                    in_channels = conv_layer.in_channels
+                    # 替换最后的Conv3d层
+                    model.classifier[-1] = nn.Conv3d(
+                        in_channels, num_classes,
+                        kernel_size=conv_layer.kernel_size,
+                        stride=conv_layer.stride,
+                        padding=conv_layer.padding
+                    )
+                else:
+                    raise ValueError(f"S3D模型的classifier最后一层不是Conv3d: {type(conv_layer)}")
+            else:
+                raise ValueError(f"S3D模型的classifier结构异常: {type(getattr(model, 'classifier', None))}")
+
+        elif model_type.startswith('mvit'):
+            # MViT系列模型 - 使用head Sequential，最后一层是Linear
+            if hasattr(model, 'head') and isinstance(model.head, nn.Sequential):
+                # head是Sequential: [Dropout, Linear]
+                linear_layer = model.head[-1]  # 最后一层Linear
+                if isinstance(linear_layer, nn.Linear):
+                    in_features = linear_layer.in_features
+                    # 替换最后的Linear层
+                    model.head[-1] = nn.Linear(in_features, num_classes)
+                else:
+                    raise ValueError(f"MViT模型 {model_type} 的head最后一层不是Linear: {type(linear_layer)}")
+            else:
+                raise ValueError(f"MViT模型 {model_type} 的head结构异常: {type(getattr(model, 'head', None))}")
+
+        elif model_type.startswith('swin3d'):
+            # Swin3D系列模型 - 使用head Linear层
+            if hasattr(model, 'head') and isinstance(model.head, nn.Linear):
                 in_features = model.head.in_features
                 model.head = nn.Linear(in_features, num_classes)
+            else:
+                raise ValueError(f"Swin3D模型 {model_type} 的head结构异常: {type(getattr(model, 'head', None))}")
+
         else:
-            raise ValueError(f"无法找到模型 {model_type} 的分类头")
-            
+            raise ValueError(f"不支持的视频模型类型: {model_type}。支持的模型: {list(VIDEO_MODEL_TRANSFORMS_MAP.keys())}")
+
+        # 调试模型架构（如果启用）
+        if debug:
+            debug_model_architecture(model, model_type, verbose=True)
+
+        # 验证transforms兼容性（如果启用）
+        if debug and model_type in VIDEO_MODEL_TRANSFORMS_MAP:
+            validate_model_transforms_compatibility(model_type, verbose=True)
+
     else:
         raise ValueError(f"不支持的模型库: {library}")
-    
+
     return model
+
+
+def create_model_with_fallback(model_type, num_classes=10, pretrained=True, **kwargs):
+    """带回退机制的模型创建函数
+
+    Args:
+        model_type (str): 模型类型名称
+        num_classes (int): 分类类别数
+        pretrained (bool): 是否使用预训练权重
+        **kwargs: 其他模型参数
+
+    Returns:
+        torch.nn.Module: 创建的模型实例
+
+    Raises:
+        ValueError: 当所有创建方式都失败时
+    """
+    try:
+        # 尝试使用统一接口创建模型
+        return create_model_unified(model_type, num_classes, pretrained, **kwargs)
+    except Exception as e:
+        print(f"警告: 统一接口创建模型失败 ({e})，尝试回退方案")
+
+        # 对于视频模型，尝试使用VideoNetModel作为回退
+        if model_type in VIDEO_MODEL_TRANSFORMS_MAP:
+            try:
+                from .video_net import VideoNetModel
+                print(f"使用VideoNetModel作为回退方案创建 {model_type}")
+                return VideoNetModel(model_type=model_type, num_classes=num_classes, pretrained=pretrained)
+            except Exception as fallback_e:
+                print(f"回退方案也失败: {fallback_e}")
+                raise ValueError(f"无法创建模型 {model_type}: 主要方式失败({e}), 回退方式失败({fallback_e})")
+        else:
+            raise ValueError(f"不支持的模型类型 {model_type}: {e}")
 
 
 def get_supported_models(task_type=None):

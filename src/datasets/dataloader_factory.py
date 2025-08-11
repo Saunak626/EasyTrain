@@ -11,20 +11,21 @@ from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
 
 
-def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwargs):
+def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_type=None, **kwargs):
     """
     统一的数据加载器创建函数
-    
+
     Args:
         dataset_name (str): 数据集名称，支持'cifar10'、'custom'或'ucf101'
         data_dir (str): 数据存储根目录路径
         batch_size (int): 批大小
         num_workers (int, optional): 数据加载的工作进程数，默认为4
+        model_type (str, optional): 模型类型，用于视频数据集的动态transforms
         **kwargs: 其他数据集特定参数，如augment, download, csv_file等
-        
+
     Returns:
         tuple: (train_loader, test_loader, num_classes) 训练和测试数据加载器及类别数
-        
+
     Raises:
         ValueError: 当指定的数据集名称不支持时
     """
@@ -63,13 +64,15 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, **kwar
         train_dataset = VideoDataset(
             dataset_path=data_dir,
             images_path='train',
-            clip_len=clip_len
+            clip_len=clip_len,
+            model_type=model_type  # 传递模型类型用于动态transforms
         )
 
         # 将val和test合并作为测试集
         test_dataset = CombinedVideoDataset(
             dataset_path=data_dir,
-            clip_len=clip_len
+            clip_len=clip_len,
+            model_type=model_type  # 传递模型类型用于动态transforms
         )
 
         num_classes = 101  # UCF-101固定为101个类别

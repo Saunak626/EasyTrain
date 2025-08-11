@@ -260,24 +260,27 @@ def run_training(config, exp_name=None):
         }
     )
 
+    # === 第3步：获取模型配置（用于数据预处理） ===
+    model_config = config.get('model', {})
+    model_name = model_config.get('type',
+                                 model_config.get('name', task_info['default_model']))
+
     # 使用简化的数据加载器创建函数
     train_dataloader, test_dataloader, num_classes = create_dataloaders(
         dataset_name=dataset_type,
         data_dir=data_config.get('root', './data'),
         batch_size=hyperparams['batch_size'],
         num_workers=data_config.get('num_workers', 8),
+        model_type=model_name,  # 传递模型类型用于动态transforms
         data_percentage=hyperparams.get('data_percentage', 1.0),
         **data_config.get('params', {})
     )
-    
-    # === 第3步：获取数据集信息 ===
+
+    # === 第4步：获取数据集信息 ===
     dataset_info = get_dataset_info(dataset_type)
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
-    # === 第4步：基于任务类型创建模型 ===
-    model_config = config.get('model', {})
-    model_name = model_config.get('type',
-                                 model_config.get('name', task_info['default_model']))
+    # === 第5步：基于任务类型创建模型 ===
 
     # 使用任务驱动的模型工厂选择
     model_factory_name = task_info['model_factory']

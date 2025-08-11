@@ -21,12 +21,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 # 导入项目内部模块
 from src.models.image_net import get_model                     # 图像模型工厂函数
 from src.models.video_net import get_video_model               # 视频模型工厂函数
-from src.losses.image_loss import get_loss_function            # 损失函数工厂函数
-from src.optimizers.optim import get_optimizer                 # 优化器工厂函数
-from src.schedules.scheduler import get_scheduler              # 学习率调度器工厂函数
+# 注释：损失函数、优化器、调度器现在通过组件注册表统一创建
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
-from src.utils.config_utils import extract_component_config    # 统一配置提取工具
+from src.utils.config_utils import extract_component_config, validate_component_config    # 统一配置提取工具
+from src.components import COMPONENT_REGISTRY  # 统一组件注册表
 
 
 # 支持的任务类型配置
@@ -237,8 +236,8 @@ def run_training(config, exp_name=None):
     task_info = SUPPORTED_TASKS[task_tag]
 
     # === 第2步：解析和验证数据配置 ===
-    data_config = config.get('data', {})
-    dataset_type = data_config.get('type', 'cifar10')
+    # 使用统一的参数提取
+    dataset_type, data_params = extract_component_config(config, 'data', 'cifar10')
 
     # 验证数据集与任务的兼容性
     if dataset_type not in task_info['supported_datasets']:
@@ -265,13 +264,16 @@ def run_training(config, exp_name=None):
     )
 
     # 使用简化的数据加载器创建函数
+    # 准备数据加载器参数，避免参数冲突
+    dataloader_kwargs = {k: v for k, v in data_params.items() if k not in ['root', 'num_workers', 'data_dir']}
+
     train_dataloader, test_dataloader, num_classes = create_dataloaders(
         dataset_name=dataset_type,
-        data_dir=data_config.get('root', './data'),
+        data_dir=data_params.get('root', './data'),
         batch_size=hyperparams['batch_size'],
-        num_workers=data_config.get('num_workers', 8),
+        num_workers=data_params.get('num_workers', 8),
         data_percentage=hyperparams.get('data_percentage', 1.0),
-        **data_config.get('params', {})
+        **dataloader_kwargs
     )
     
     # === 第3步：获取数据集信息 ===
@@ -279,16 +281,14 @@ def run_training(config, exp_name=None):
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
     # === 第4步：基于任务类型创建模型 ===
-    model_config = config.get('model', {})
-    model_name = model_config.get('type',
-                                 model_config.get('name', task_info['default_model']))
+    # 使用统一的参数提取
+    model_name, model_params = extract_component_config(config, 'model', task_info['default_model'])
 
     # 使用任务驱动的模型工厂选择
     model_factory_name = task_info['model_factory']
     model_factory = globals()[model_factory_name]
 
     # 统一的模型创建逻辑
-    model_params = model_config.get('params', {}).copy()
     model_params['num_classes'] = dataset_info['num_classes']
 
     model = model_factory(
@@ -296,21 +296,24 @@ def run_training(config, exp_name=None):
         **model_params
     )
 
-    # 创建损失函数 - 使用统一的参数提取
+    # 创建损失函数 - 使用统一的参数提取和组件注册表
     loss_name, loss_params = extract_component_config(config, 'loss', 'crossentropy')
-    loss_fn = get_loss_function(loss_name, **loss_params)
+    validate_component_config(loss_name, loss_params, 'loss', COMPONENT_REGISTRY.get_supported_components('losses'))
+    loss_fn = COMPONENT_REGISTRY.create_loss(loss_name, **loss_params)
 
-    # 创建优化器 - 使用统一的参数提取
+    # 创建优化器 - 使用统一的参数提取和组件注册表
     optimizer_name, optimizer_params = extract_component_config(config, 'optimizer', 'adam')
-    optimizer = get_optimizer(
-        model,
+    validate_component_config(optimizer_name, optimizer_params, 'optimizer', COMPONENT_REGISTRY.get_supported_components('optimizers'))
+    optimizer = COMPONENT_REGISTRY.create_optimizer(
         optimizer_name,
+        model.parameters(),
         hyperparams['learning_rate'],
         **optimizer_params
     )
 
-    # 创建学习率调度器 - 使用统一的参数提取
+    # 创建学习率调度器 - 使用统一的参数提取和组件注册表
     scheduler_name, scheduler_params = extract_component_config(config, 'scheduler', 'onecycle')
+    validate_component_config(scheduler_name, scheduler_params, 'scheduler', COMPONENT_REGISTRY.get_supported_components('schedulers'))
     
     # 根据调度器类型设置默认参数
     if scheduler_name == 'onecycle':
@@ -319,10 +322,10 @@ def run_training(config, exp_name=None):
         scheduler_params.setdefault('steps_per_epoch', len(train_dataloader))
     elif scheduler_name == 'cosine':
         scheduler_params.setdefault('T_max', hyperparams['epochs'])
-    
-    lr_scheduler = get_scheduler(
-        optimizer,
+
+    lr_scheduler = COMPONENT_REGISTRY.create_scheduler(
         scheduler_name,
+        optimizer,
         **scheduler_params
     )
 

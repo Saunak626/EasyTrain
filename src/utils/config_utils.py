@@ -63,13 +63,13 @@ def extract_component_config(config, component_type, default_type=None):
 
 def validate_component_config(component_name, params, component_type, supported_components=None):
     """验证组件配置的有效性
-    
+
     Args:
         component_name (str): 组件名称
         params (dict): 组件参数
         component_type (str): 组件类型
         supported_components (list, optional): 支持的组件列表
-        
+
     Raises:
         ValueError: 当组件不支持时
     """
@@ -78,6 +78,25 @@ def validate_component_config(component_name, params, component_type, supported_
             f"不支持的{component_type}: {component_name}。"
             f"支持的{component_type}: {supported_components}"
         )
+
+    # 使用组件注册表进行参数验证
+    try:
+        from src.components import COMPONENT_REGISTRY
+        # 组件类型映射到注册表中的键名
+        registry_type_map = {
+            'loss': 'losses',
+            'optimizer': 'optimizers',
+            'scheduler': 'schedulers',
+            'model': 'models',
+            'data': 'datasets'
+        }
+        registry_type = registry_type_map.get(component_type, f"{component_type}s")
+        COMPONENT_REGISTRY.validate_component_params(
+            registry_type, component_name, params
+        )
+    except ImportError:
+        # 如果组件注册表不可用，跳过验证
+        pass
 
 
 def merge_config_with_defaults(config, defaults):
@@ -170,7 +189,12 @@ DEFAULT_CONFIGS = {
         'type': 'cosine',
         'T_max': 50
     },
+    'model': {
+        'type': 'resnet18',
+        'pretrained': True
+    },
     'data': {
+        'type': 'cifar10',
         'num_workers': 8,
         'pin_memory': True
     }
@@ -191,26 +215,122 @@ def get_default_config(component_type):
 
 def normalize_config_structure(config):
     """标准化配置结构，将传统格式转换为简化格式
-    
+
     Args:
         config (dict): 原始配置
-        
+
     Returns:
         dict: 标准化后的配置
     """
     normalized = config.copy()
-    
+
     # 需要标准化的组件类型
     component_types = ['loss', 'optimizer', 'scheduler', 'model', 'data']
-    
+
     for comp_type in component_types:
         if comp_type in normalized:
             comp_config = normalized[comp_type]
-            
+
             # 如果使用传统格式，转换为简化格式
             if 'name' in comp_config and 'params' in comp_config:
                 new_config = {'type': comp_config['name']}
                 new_config.update(comp_config['params'])
                 normalized[comp_type] = new_config
-    
+
     return normalized
+
+
+def validate_config_file(config):
+    """验证配置文件的完整性和有效性
+
+    Args:
+        config (dict): 配置字典
+
+    Raises:
+        ValueError: 当配置无效时
+    """
+    # 必需的顶级配置节
+    required_sections = ['task', 'training', 'swanlab', 'data', 'hp']
+
+    for section in required_sections:
+        if section not in config:
+            raise ValueError(f"配置文件缺少必需的部分: {section}")
+
+    # 验证task配置
+    if 'tag' not in config['task']:
+        raise ValueError("配置文件中必须指定 task.tag")
+
+    # 验证training配置
+    if 'exp_name' not in config['training']:
+        raise ValueError("配置文件中必须指定 training.exp_name")
+
+    # 验证hp配置
+    required_hp = ['batch_size', 'learning_rate', 'epochs']
+    for hp in required_hp:
+        if hp not in config['hp']:
+            raise ValueError(f"配置文件中缺少必需的超参数: hp.{hp}")
+
+    # 验证各组件配置
+    component_types = ['loss', 'optimizer', 'scheduler', 'model', 'data']
+    for comp_type in component_types:
+        if comp_type in config:
+            try:
+                comp_name, comp_params = extract_component_config(config, comp_type)
+                validate_component_config(comp_name, comp_params, comp_type)
+            except Exception as e:
+                raise ValueError(f"配置文件中 {comp_type} 部分无效: {e}")
+
+    return True
+
+
+def get_config_template():
+    """获取标准配置文件模板
+
+    Returns:
+        dict: 配置文件模板
+    """
+    return {
+        'task': {
+            'tag': 'image_classification',  # 或 'video_classification'
+            'description': '任务描述'
+        },
+        'training': {
+            'exp_name': 'my_experiment',
+            'save_model': True,
+            'model_save_path': 'models/my_model.pth'
+        },
+        'swanlab': {
+            'project_name': 'MyProject',
+            'description': '实验描述'
+        },
+        'data': {
+            'type': 'cifar10',
+            'root': './data',
+            'num_workers': 8
+        },
+        'model': {
+            'type': 'resnet18',
+            'pretrained': True
+        },
+        'hp': {
+            'batch_size': 128,
+            'learning_rate': 0.001,
+            'epochs': 10,
+            'dropout': 0.1
+        },
+        'optimizer': {
+            'type': 'adam',
+            'weight_decay': 0.0001
+        },
+        'scheduler': {
+            'type': 'cosine',
+            'T_max': 10
+        },
+        'loss': {
+            'type': 'crossentropy'
+        },
+        'gpu': {
+            'device_ids': '0',
+            'multi_gpu': False
+        }
+    }

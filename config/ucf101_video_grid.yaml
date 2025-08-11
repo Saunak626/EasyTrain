@@ -68,7 +68,7 @@ grid_search:
     # batch_size支持两种模式：
     # 1. 单一值：所有模型使用相同的batch_size，如 [128]
     # 2. 对应数组：与model.type数量相同，按顺序对应每个模型的batch_size
-    hp.batch_size: [128, 128, 128, 32, 16, 16, 16, 16, 16]
+    hp.batch_size: [128, 64, 128, 32, 16, 16, 16, 16, 16]
 
     # 优化器参数
     optimizer.name: ["adam"]

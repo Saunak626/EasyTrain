@@ -21,27 +21,27 @@ class ImageNetModel(nn.Module):
         backbone (nn.Module): 基础网络模型
     """
     
-    def __init__(self, model_name='resnet18', num_classes=10, pretrained=True, **kwargs):
+    def __init__(self, model_type='resnet18', num_classes=10, pretrained=True, **kwargs):
         """
         初始化图像分类模型
-        
+
         Args:
-            model_name (str, optional): 模型名称，支持'resnet18', 'resnet50', 
+            model_type (str, optional): 模型类型，支持'resnet18', 'resnet50',
                 'efficientnet_b0', 'mobilenet_v2', 'densenet121'等，默认为'resnet18'
             num_classes (int, optional): 输出类别数，默认为10
             pretrained (bool, optional): 是否使用预训练权重，默认为True
             **kwargs: 其他模型参数（目前未使用）
         """
         super().__init__()
-        self.model_name = model_name
+        self.model_type = model_type
         self.num_classes = num_classes
         # 忽略不需要的参数如input_size, freeze_backbone等
-        
+
         # 创建预训练模型
-        if model_name in ['resnet18', 'resnet50', 'efficientnet_b0']:
+        if model_type in ['resnet18', 'resnet50', 'efficientnet_b0']:
             self.backbone = timm.create_model(
-                model_name, 
-                pretrained=pretrained, 
+                model_type,
+                pretrained=pretrained,
                 num_classes=num_classes
             )
             # 适配CIFAR-10小尺寸输入
@@ -51,10 +51,10 @@ class ImageNetModel(nn.Module):
                 self.backbone.maxpool = nn.Identity()
         else:
             # 使用torchvision模型
-            if model_name == 'mobilenet_v2':
+            if model_type == 'mobilenet_v2':
                 self.backbone = models.mobilenet_v2(pretrained=pretrained)
                 self.backbone.classifier[1] = nn.Linear(1280, num_classes)
-            elif model_name == 'densenet121':
+            elif model_type == 'densenet121':
                 self.backbone = models.densenet121(pretrained=pretrained)
                 self.backbone.classifier = nn.Linear(1024, num_classes)
     
@@ -71,12 +71,12 @@ class ImageNetModel(nn.Module):
         return self.backbone(x)
 
 
-def get_model(model_name='resnet18', **kwargs):
+def get_model(model_type='resnet18', **kwargs):
     """
     模型工厂函数，创建预训练图像分类模型实例
 
     Args:
-        model_name (str, optional): 模型名称，支持'resnet18', 'resnet50',
+        model_type (str, optional): 模型类型，支持'resnet18', 'resnet50',
             'efficientnet_b0', 'mobilenet_v2', 'densenet121'等，默认为'resnet18'
         **kwargs: 传递给模型的其他参数，如num_classes, pretrained等
 
@@ -84,9 +84,9 @@ def get_model(model_name='resnet18', **kwargs):
         torch.nn.Module: 配置好的模型实例
     """
     # 验证模型是否适用于图像分类任务
-    if not validate_model_for_task(model_name, 'image_classification'):
+    if not validate_model_for_task(model_type, 'image_classification'):
         # 如果验证失败，回退到原有实现
-        return ImageNetModel(model_name=model_name, **kwargs)
+        return ImageNetModel(model_type=model_type, **kwargs)
 
     # 使用统一的模型创建接口
-    return create_model_unified(model_name, **kwargs)
+    return create_model_unified(model_type, **kwargs)

@@ -97,31 +97,31 @@ MODEL_REGISTRY = {
 }
 
 
-def create_model_unified(model_name, num_classes=10, pretrained=True, **kwargs):
+def create_model_unified(model_type, num_classes=10, pretrained=True, **kwargs):
     """统一的模型创建接口
-    
+
     Args:
-        model_name (str): 模型名称
+        model_type (str): 模型类型
         num_classes (int): 分类类别数
         pretrained (bool): 是否使用预训练权重
         **kwargs: 其他模型参数
-        
+
     Returns:
         torch.nn.Module: 创建的模型实例
-        
+
     Raises:
-        ValueError: 当模型名称不支持时
+        ValueError: 当模型类型不支持时
     """
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"不支持的模型: {model_name}。支持的模型: {list(MODEL_REGISTRY.keys())}")
-    
-    config = MODEL_REGISTRY[model_name]
+    if model_type not in MODEL_REGISTRY:
+        raise ValueError(f"不支持的模型: {model_type}。支持的模型: {list(MODEL_REGISTRY.keys())}")
+
+    config = MODEL_REGISTRY[model_type]
     library = config['library']
     
     if library == 'timm':
         # 使用timm库创建模型
         model = timm.create_model(
-            model_name,
+            model_type,
             pretrained=pretrained,
             num_classes=num_classes
         )
@@ -137,14 +137,14 @@ def create_model_unified(model_name, num_classes=10, pretrained=True, **kwargs):
                 
     elif library == 'torchvision':
         # 使用torchvision创建图像模型
-        if model_name == 'mobilenet_v2':
+        if model_type == 'mobilenet_v2':
             model = models.mobilenet_v2(pretrained=pretrained)
             model.classifier[1] = nn.Linear(config['classifier_in_features'], num_classes)
-        elif model_name == 'densenet121':
+        elif model_type == 'densenet121':
             model = models.densenet121(pretrained=pretrained)
             model.classifier = nn.Linear(config['classifier_in_features'], num_classes)
         else:
-            raise ValueError(f"未实现的torchvision模型: {model_name}")
+            raise ValueError(f"未实现的torchvision模型: {model_type}")
             
     elif library == 'torchvision.video':
         # 使用torchvision创建视频模型
@@ -168,7 +168,7 @@ def create_model_unified(model_name, num_classes=10, pretrained=True, **kwargs):
                 in_features = model.head.in_features
                 model.head = nn.Linear(in_features, num_classes)
         else:
-            raise ValueError(f"无法找到模型 {model_name} 的分类头")
+            raise ValueError(f"无法找到模型 {model_type} 的分类头")
             
     else:
         raise ValueError(f"不支持的模型库: {library}")
@@ -192,17 +192,17 @@ def get_supported_models(task_type=None):
             if config['task_type'] == task_type]
 
 
-def validate_model_for_task(model_name, task_type):
+def validate_model_for_task(model_type, task_type):
     """验证模型是否适用于指定任务
-    
+
     Args:
-        model_name (str): 模型名称
+        model_type (str): 模型类型
         task_type (str): 任务类型
-        
+
     Returns:
         bool: 是否适用
     """
-    if model_name not in MODEL_REGISTRY:
+    if model_type not in MODEL_REGISTRY:
         return False
-    
-    return MODEL_REGISTRY[model_name]['task_type'] == task_type
+
+    return MODEL_REGISTRY[model_type]['task_type'] == task_type

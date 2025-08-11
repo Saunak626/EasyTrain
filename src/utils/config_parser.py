@@ -7,6 +7,23 @@
 4. 模式适配：支持网格搜索和单实验两种模式，满足不同的训练需求
 5. GPU环境管理：智能处理GPU设备分配，避免与分布式训练框架冲突
 
+参数优先级机制（从高到低）：
+1. 命令行参数（最高优先级）
+   - 直接参数：--learning_rate, --batch_size, --epochs 等
+   - 嵌套参数：--model.type, --optimizer.name 等
+2. 网格搜索配置（中等优先级）
+   - grid_search.grid 中定义的参数组合
+   - 仅在单实验模式下作为默认值使用
+3. YAML配置文件（基础优先级）
+   - 配置文件中的 hp, model, optimizer 等节点
+4. 代码默认值（最低优先级）
+   - 各模块中定义的默认参数值
+
+模型参数命名规范：
+- 统一使用 model.type 作为模型类型参数名
+- 兼容 --model_name 命令行参数（映射到 model.type）
+- 配置文件中统一使用 model.type 字段
+
 核心功能：
 - 解析命令行参数和YAML配置文件
 - 处理嵌套配置参数的覆盖逻辑
@@ -203,11 +220,12 @@ def parse_arguments(mode="grid_search"):
                     config["training"] = {}
                 config["training"]["exp_name"] = args.exp_name
             
-            # 处理模型配置
-            if args.model_name is not None:
+            # 处理模型配置 - 支持两种参数名
+            model_type = getattr(args, 'model.type', None) or args.model_name
+            if model_type is not None:
                 if "model" not in config:
                     config["model"] = {}
-                config["model"]["name"] = args.model_name
+                config["model"]["type"] = model_type
         
         return config
     

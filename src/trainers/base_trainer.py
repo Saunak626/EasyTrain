@@ -288,7 +288,7 @@ def run_training(config, exp_name=None):
     model_params['num_classes'] = dataset_info['num_classes']
 
     model = model_factory(
-        model_name=model_name,
+        model_type=model_name,
         **model_params
     )
 

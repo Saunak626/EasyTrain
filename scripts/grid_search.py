@@ -328,6 +328,11 @@ def run_grid_search(args):
 
     print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")
+    
+    # 显示全局参数覆盖
+    if args.data_percentage is not None:
+        print(f"🎯 全局参数覆盖: data_percentage={args.data_percentage}")
+    
     print("=" * 60)
 
     results = []
@@ -336,8 +341,13 @@ def run_grid_search(args):
     for i, params in enumerate(combinations, 1):
         print(f"📊 准备实验 {i}/{len(combinations)}")
 
+        # 将命令行参数添加到实验参数中
+        experiment_params = params.copy()
+        if args.data_percentage is not None:
+            experiment_params['data_percentage'] = args.data_percentage
+
         result = run_single_experiment(
-            params, f"{i:03d}",
+            experiment_params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
             config_path=args.config,
         )

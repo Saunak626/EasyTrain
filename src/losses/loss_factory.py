@@ -1,6 +1,6 @@
 """
-图像任务损失函数模块
-包含常用的图像分类和回归损失函数
+损失函数工厂模块
+包含图像分类和视频分类任务的常用损失函数定义和工厂函数
 """
 
 import torch
@@ -86,47 +86,62 @@ class LabelSmoothingLoss(nn.Module):
         return loss
 
 
-def get_loss_function(loss_name, **kwargs):
+def get_loss_function(loss_config=None, loss_name=None, **kwargs):
     """
     损失函数工厂函数，创建并配置损失函数实例
-    
+
     Args:
-        loss_name (str): 损失函数名称，支持'crossentropy', 'focal', 'labelsmoothing', 'mse'
-        **kwargs: 损失函数参数，如weight, alpha, gamma, num_classes等
-        
+        loss_config (dict, optional): 损失函数配置字典
+        loss_name (str, optional): 损失函数名称，用于向后兼容
+        **kwargs: 损失函数参数，用于向后兼容
+
     Returns:
         torch.nn.Module: 配置好的损失函数实例
-        
-    Raises:
-        ValueError: 当指定的损失函数名称不支持时
-        
+
     示例：
-        >>> loss_fn = get_loss_function('crossentropy')
-        >>> loss_fn = get_loss_function('focal', alpha=1.0, gamma=2.0)
+        >>> loss_fn = get_loss_function({'type': 'crossentropy', 'label_smoothing': 0.1})
+        >>> loss_fn = get_loss_function(loss_name='crossentropy', label_smoothing=0.1)
     """
+    # 简化的配置解析
+    if loss_config:
+        loss_name = loss_config.get('type') or loss_config.get('name', 'crossentropy')
+        params = loss_config.get('params', {}) if 'params' in loss_config else {k: v for k, v in loss_config.items() if k not in ['type', 'name']}
+    else:
+        loss_name = loss_name or 'crossentropy'
+        params = kwargs
+
     loss_name = loss_name.lower()
 
     if loss_name == "crossentropy":
         return nn.CrossEntropyLoss(
-            weight=kwargs.get('weight', None),
-            ignore_index=kwargs.get('ignore_index', -100),
-            reduction=kwargs.get('reduction', 'mean'),
-            label_smoothing=kwargs.get('label_smoothing', 0.0)
+            weight=params.get('weight', None),
+            ignore_index=params.get('ignore_index', -100),
+            reduction=params.get('reduction', 'mean'),
+            label_smoothing=params.get('label_smoothing', 0.0)
         )
     elif loss_name == "focal":
         return FocalLoss(
-            alpha=kwargs.get('alpha', 1.0),
-            gamma=kwargs.get('gamma', 2.0),
-            reduction=kwargs.get('reduction', 'mean')
+            alpha=params.get('alpha', 1.0),
+            gamma=params.get('gamma', 2.0),
+            reduction=params.get('reduction', 'mean')
         )
     elif loss_name == "labelsmoothing":
         return LabelSmoothingLoss(
-            num_classes=kwargs.get('num_classes', 10),
-            smoothing=kwargs.get('smoothing', 0.1)
+            num_classes=params.get('num_classes', 10),
+            smoothing=params.get('smoothing', 0.1)
         )
     elif loss_name == "mse":
         return nn.MSELoss(
-            reduction=kwargs.get('reduction', 'mean')
+            reduction=params.get('reduction', 'mean')
+        )
+    elif loss_name == "l1":
+        return nn.L1Loss(
+            reduction=params.get('reduction', 'mean')
+        )
+    elif loss_name == "smoothl1":
+        return nn.SmoothL1Loss(
+            reduction=params.get('reduction', 'mean'),
+            beta=params.get('beta', 1.0)
         )
     else:
-        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse")
+        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse, l1, smoothl1")

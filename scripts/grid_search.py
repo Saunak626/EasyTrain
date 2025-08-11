@@ -42,6 +42,7 @@ def generate_combinations(config):
 
     支持标准笛卡尔积和智能配对两种模式。
     当model.type和hp.batch_size数组长度相同时，按位置配对。
+    支持通过models_to_train参数过滤要训练的模型。
 
     Args:
         config (dict): 网格搜索配置
@@ -56,8 +57,17 @@ def generate_combinations(config):
     if not grid:
         return [fixed] if fixed else [{}]
 
+    # 获取模型选择列表，如果未配置则使用grid中的所有模型
+    models_to_train = config.get("models_to_train", [])
+
     # 检测智能配对模式
     model_types = _as_list(grid.get("model.type", []))
+
+    # 如果配置了models_to_train，则过滤模型列表
+    if models_to_train:
+        model_types = [model for model in model_types if model in models_to_train]
+        print(f"🎯 根据models_to_train配置，将训练以下模型: {model_types}")
+
     batch_sizes = _as_list(grid.get("hp.batch_size", []))
 
     # 配对模式：两个数组长度相同时按位置配对

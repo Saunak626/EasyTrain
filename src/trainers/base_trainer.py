@@ -25,6 +25,7 @@ from src.optimizers.optimizer_factory import get_optimizer    # 优化器工厂�
 from src.schedules.scheduler_factory import get_scheduler     # 学习率调度器工厂函数
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
+from src.utils.gpu_monitor import monitor_gpu_memory_in_training, print_epoch_gpu_summary, reset_gpu_monitoring, cleanup_gpu_memory
 # 工厂函数内部处理配置解析
 
 
@@ -87,6 +88,10 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
 
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
+        # 监控GPU内存使用（每10个batch更新一次，减少性能影响）
+        if batch_idx % 10 == 0:
+            monitor_gpu_memory_in_training()
+
         # 更新进度条
         if accelerator.is_main_process and batch_idx % 10 == 0:
             current_lr = optimizer.param_groups[0]['lr']
@@ -102,6 +107,9 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     # 关闭进度条
     if accelerator.is_main_process:
         progress_bar.close()
+
+    # 最后更新一次GPU内存监控
+    monitor_gpu_memory_in_training()
 
     # 返回平均训练损失
     avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -189,6 +197,10 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
 
         # 记录测试指标到实验追踪系统
         accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
+
+        # 打印epoch结束时的GPU内存使用摘要
+        print_epoch_gpu_summary(epoch)
+
         return avg_loss, accuracy
 
     # 非主进程返回None
@@ -243,6 +255,9 @@ def run_training(config, exp_name=None):
 
     # 初始化Accelerator，指定swanlab为日志记录工具
     accelerator = Accelerator(log_with="swanlab")
+
+    # 重置GPU监控统计（为新的训练实验准备）
+    reset_gpu_monitoring()
 
     # 记录到SwanLab的超参数
     hyperparams = config['hp']
@@ -358,8 +373,7 @@ def run_training(config, exp_name=None):
         tqdm.write(f"训练完成! 最佳准确率: {best_accuracy:.2f}%")
 
     # 清理GPU缓存，为下一个实验释放资源
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    cleanup_gpu_memory()
 
     # 返回训练结果摘要（直接返回，不写入文件）
     return {

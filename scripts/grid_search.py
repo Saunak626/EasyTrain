@@ -174,10 +174,13 @@ def save_results_to_csv(results, filename):
 
     param_keys = sorted({k for r in results for k in r.get("params", {}).keys()})
 
+    # 将model.type移到第3列，其他参数按原顺序排列
+    other_param_keys = [k for k in param_keys if k != "model.type"]
+    
     fieldnames = [
-        "experiment_id", "exp_name", "success",
+        "experiment_id", "exp_name", "model.type", "success",
         "best_accuracy", "final_accuracy"
-    ] + param_keys
+    ] + other_param_keys
 
     with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)

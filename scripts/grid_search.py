@@ -38,73 +38,122 @@ def _as_list(v):
     return v if isinstance(v, (list, tuple)) else [v]
 
 def generate_combinations(config):
-    """生成参数组合列表
-
-    支持标准笛卡尔积和智能配对两种模式。
-    当model.type和hp.batch_size数组长度相同时，按位置配对。
-    支持通过models_to_train参数过滤要训练的模型。
-
+    """
+    智能参数组合生成器，按照用户设计的逻辑处理模型-batch_size配对
+    
+    设计逻辑：
+    1. 从YAML中获取model.type和hp.batch_size
+    2. 根据hp.batch_size数量判断：
+       - 如果hp.batch_size=1，扩充长度与model.type一致
+       - 如果hp.batch_size≠1且≠model.type长度，报错终止
+       - 如果hp.batch_size≠1且=model.type长度，按顺序配对
+    3. 根据models_to_train启用对应的配对
+    4. 将配对与其他参数进行笛卡尔组合
+    
     Args:
         config (dict): 网格搜索配置
-
+            
     Returns:
-        list[dict]: 参数组合列表
+        list[dict]: 参数组合列表，每个字典代表一组实验参数
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
     grid = gs.get("grid", {}) or {}
 
+    # 边界情况：无搜索参数时返回固定参数
     if not grid:
         return [fixed] if fixed else [{}]
 
-    # 获取模型选择列表，如果未配置则使用grid中的所有模型
+    # === 第1步：获取参数 ===
+    model_types = _as_list(grid.get("model.type", []))
+    batch_sizes = _as_list(grid.get("hp.batch_size", []))
     models_to_train = config.get("models_to_train", [])
 
-    # 检测智能配对模式
-    model_types = _as_list(grid.get("model.type", []))
+    print(f"📋 原始配置:")
+    print(f"   model.type: {model_types} (长度: {len(model_types)})")
+    print(f"   hp.batch_size: {batch_sizes} (长度: {len(batch_sizes)})")
+    print(f"   models_to_train: {models_to_train}")
 
-    # 如果配置了models_to_train，则过滤模型列表
+    # === 第2步：长度检查和处理 ===
+    if len(batch_sizes) == 1:
+        # 情况1：batch_size长度=1，扩充到与model.type一致
+        batch_sizes = batch_sizes * len(model_types)
+        print(f"🔄 扩充batch_size: {batch_sizes} (扩充到与model.type长度一致)")
+    elif len(batch_sizes) != len(model_types):
+        # 情况2：batch_size长度≠1且≠model.type长度，报错
+        raise ValueError(
+            f"❌ 配置错误: hp.batch_size长度({len(batch_sizes)}) 必须等于1或等于model.type长度({len(model_types)})\n"
+            f"   model.type: {model_types}\n"
+            f"   hp.batch_size: {batch_sizes}\n"
+            f"   请修改config/ucf101_video_grid.yaml中的配置"
+        )
+    else:
+        # 情况3：batch_size长度=model.type长度，按顺序配对
+        print(f"✅ 长度匹配，将按顺序配对")
+
+    # === 第3步：创建模型-batch_size配对字典 ===
+    model_batch_dict = dict(zip(model_types, batch_sizes))
+    print(f"📊 模型-batch_size配对字典: {model_batch_dict}")
+
+    # === 第4步：根据models_to_train过滤配对 ===
     if models_to_train:
-        model_types = [model for model in model_types if model in models_to_train]
-        print(f"🎯 根据models_to_train配置，将训练以下模型: {model_types}")
+        # 过滤出启用的模型配对
+        enabled_pairs = {model: batch_size for model, batch_size in model_batch_dict.items() 
+                        if model in models_to_train}
+        if not enabled_pairs:
+            raise ValueError(f"❌ models_to_train中的模型 {models_to_train} 在model.type中未找到")
+        print(f"🎯 根据models_to_train启用的配对: {enabled_pairs}")
+    else:
+        # 如果未配置models_to_train，使用所有配对
+        enabled_pairs = model_batch_dict
+        print(f"🎯 使用所有模型配对: {enabled_pairs}")
 
-    batch_sizes = _as_list(grid.get("hp.batch_size", []))
-
-    # 配对模式：两个数组长度相同时按位置配对
-    if (len(model_types) > 1 and len(batch_sizes) > 1 and
-        len(model_types) == len(batch_sizes)):
-
-        model_batch_pairs = list(zip(model_types, batch_sizes))
-        other_grid = {k: v for k, v in grid.items()
-                     if k not in ["model.type", "hp.batch_size"]}
-
-        if not other_grid:
-            return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
-                   for model_type, batch_size in model_batch_pairs]
-        else:
-            other_valid_items = [(k, _as_list(v)) for k, v in other_grid.items() if _as_list(v)]
-            if other_valid_items:
-                other_keys, other_values_lists = zip(*other_valid_items)
-                combinations = []
-                for model_type, batch_size in model_batch_pairs:
-                    for other_combo in itertools.product(*other_values_lists):
-                        combo = {**fixed, "model.type": model_type, "hp.batch_size": batch_size}
-                        combo.update(dict(zip(other_keys, other_combo)))
-                        combinations.append(combo)
-                return combinations
-            else:
-                return [{**fixed, "model.type": model_type, "hp.batch_size": batch_size}
-                       for model_type, batch_size in model_batch_pairs]
-
-    # 标准笛卡尔积模式
-    valid_items = [(k, _as_list(v)) for k, v in grid.items() if _as_list(v)]
-
-    if not valid_items:
-        return [fixed] if fixed else [{}]
-
-    keys, values_lists = zip(*valid_items)
-    return [{**fixed, **dict(zip(keys, combo))}
-            for combo in itertools.product(*values_lists)]
+    # === 第5步：获取其他参数 ===
+    other_grid = {k: v for k, v in grid.items() 
+                 if k not in ["model.type", "hp.batch_size"]}
+    
+    # === 第6步：生成笛卡尔组合 ===
+    if not other_grid:
+        # 只有模型-batch_size配对，无其他参数
+        combinations = []
+        for model_type, batch_size in enabled_pairs.items():
+            combinations.append({
+                **fixed, 
+                "model.type": model_type, 
+                "hp.batch_size": batch_size
+            })
+        print(f"🔧 生成 {len(combinations)} 个基础组合（无其他参数）")
+        return combinations
+    else:
+        # 有其他参数，进行笛卡尔积组合
+        other_valid_items = [(k, _as_list(v)) for k, v in other_grid.items() if _as_list(v)]
+        if not other_valid_items:
+            # 其他参数都为空
+            combinations = []
+            for model_type, batch_size in enabled_pairs.items():
+                combinations.append({
+                    **fixed, 
+                    "model.type": model_type, 
+                    "hp.batch_size": batch_size
+                })
+            return combinations
+        
+        # 进行笛卡尔积组合
+        other_keys, other_values_lists = zip(*other_valid_items)
+        combinations = []
+        
+        for model_type, batch_size in enabled_pairs.items():
+            for other_combo in itertools.product(*other_values_lists):
+                combo = {
+                    **fixed, 
+                    "model.type": model_type, 
+                    "hp.batch_size": batch_size
+                }
+                combo.update(dict(zip(other_keys, other_combo)))
+                combinations.append(combo)
+        
+        print(f"🔧 生成 {len(combinations)} 个组合（{len(enabled_pairs)}个模型配对 × {len(list(itertools.product(*other_values_lists)))}个其他参数组合）")
+        return combinations
 
 def save_results_to_csv(results, filename):
     """保存实验结果到CSV文件

@@ -32,7 +32,7 @@ model:
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
-  epochs: 1         # 训练轮数（固定值，不参与网格搜索）
+  epochs: 5         # 训练轮数（固定值，不参与网格搜索）
   # data_percentage 由命令行参数控制，不在此设置默认值
 
 # GPU配置
@@ -48,16 +48,16 @@ multi_gpu:
 # 模型选择配置
 models_to_train:
   # 启用要训练的模型列表，注释掉不需要训练的模型
+  - "r3d_18"
+  - "mc3_18"
+  - "r2plus1d_18"
   - "s3d"
-  # - "mvit_v1_b"
-  # - "mvit_v2_s"
+  - "mvit_v1_b"
+  - "mvit_v2_s"
   - "swin3d_b"
   - "swin3d_s"
   - "swin3d_t"
   # 可选的其他模型（当前已注释）
-  # - "r3d_18"
-  # - "mc3_18"
-  # - "r2plus1d_18"
 
 # 网格搜索设置
 max_experiments: 20
@@ -70,21 +70,28 @@ results_file: "video_grid_search_results.csv"
 grid_search:
   grid:
     # 模型相关参数（主要搜索内容）
-    # model.type: [
-    #   "r3d_18", "mc3_18", "r2plus1d_18", "s3d",
-    #   "mvit_v1_b", "mvit_v2_s",
-    #   "swin3d_b", "swin3d_s", "swin3d_t"
-    # ] 
     model.type: [
+      "r3d_18", "mc3_18", "r2plus1d_18", 
       "s3d", "mvit_v1_b", "mvit_v2_s",
       "swin3d_b", "swin3d_s", "swin3d_t"
-    ] 
+    ]
+
+    hp.batch_size: [
+    128, 128, 128,
+    128, 36, 32, 
+    16, 16, 16]
 
     # batch_size支持两种模式：
     # 1. 单一值：所有模型使用相同的batch_size，如 [128]
     # 2. 对应数组：与model.type数量相同，按顺序对应每个模型的batch_size
     # 根据模型复杂度和内存需求优化的batch_size配置：
-    hp.batch_size: [128, 36, 32, 16, 16, 16]
+
+    # model.type: [
+    #   "s3d", "mvit_v1_b", "mvit_v2_s",
+    #   "swin3d_b", "swin3d_s", "swin3d_t"
+    # ] 
+
+    # hp.batch_size: [128, 36, 32, 16, 16, 16]
 
     # 超参数
     hp.learning_rate: [0.001]

@@ -503,18 +503,11 @@ hp:
 
 ## 📖 进阶学习资源
 
-### 1. 关键设计文档
-- `TASK_TAG_IMPLEMENTATION.md` - 任务切换机制详解
-- `CONFIG_PARSER_ANALYSIS.md` - 配置解析系统分析
-- `ARCHITECTURE_ANALYSIS_REPORT.md` - 整体架构分析
+### 1. 项目完整文档
+- `PROJECT_DOCUMENTATION.md` - 完整的项目文档，包含所有功能特性
 
-### 2. 重构历史
-- `REFACTORING_COMPLETION_REPORT.md` - 重构过程记录
-- `TASK1_COMPLETION_REPORT.md` - 功能完善记录
-- `TASK2_COMPLETION_REPORT.md` - 注释改进记录
-
-### 3. 最佳实践示例
-- `config/examples/` - 配置文件示例
+### 2. 最佳实践示例
+- `config/` - 配置文件示例
 - `src/models/model_registry.py` - 统一接口设计示例
 - `src/datasets/video_dataset.py` - 抽象基类设计示例
 

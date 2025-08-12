@@ -7,6 +7,7 @@ commit/
 # 实验记录
 swanlog/
 runs/
+tmp/
 
 # 无用文件
 *.pyc

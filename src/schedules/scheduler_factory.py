@@ -84,5 +84,21 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
             cooldown=params.get('cooldown', 0),
             eps=params.get('eps', 1e-8)
         )
+    elif scheduler_name == "linear":
+        # Linear decay scheduler (LinearLR)
+        return lr_scheduler.LinearLR(
+            optimizer=optimizer,
+            start_factor=params.get('start_factor', 1.0),
+            end_factor=params.get('end_factor', 0.1),
+            total_iters=params.get('total_iters', epochs),
+            last_epoch=params.get('last_epoch', -1)
+        )
+    elif scheduler_name == "multistep":
+        return lr_scheduler.MultiStepLR(
+            optimizer=optimizer,
+            milestones=params.get('milestones', [30, 60, 90]),
+            gamma=params.get('gamma', 0.1),
+            last_epoch=params.get('last_epoch', -1)
+        )
     else:
-        raise ValueError(f"不支持的调度器: {scheduler_name}。支持的调度器: onecycle, step, cosine, exponential, plateau")
+        raise ValueError(f"不支持的调度器: {scheduler_name}。支持的调度器: onecycle, step, cosine, exponential, plateau, linear, multistep")

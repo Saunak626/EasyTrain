@@ -184,10 +184,21 @@ def validate_model_transforms_compatibility(model_type, verbose=False):
         # 测试transforms
         try:
             output = transforms(test_input)
-            expected_shape = (3, 16, 224, 224)  # (C, T, H, W)
-
-            if output.shape != expected_shape:
-                message = f"输出形状不匹配: 期望{expected_shape}, 实际{output.shape}"
+            
+            # 不同模型有不同的预训练分辨率，需要灵活处理
+            expected_channels, expected_frames = 3, 16
+            actual_c, actual_t, actual_h, actual_w = output.shape
+            
+            # 检查通道数和帧数是否正确
+            if actual_c != expected_channels or actual_t != expected_frames:
+                message = f"通道数或帧数不匹配: 期望({expected_channels}, {expected_frames}, H, W), 实际{output.shape}"
+                if verbose:
+                    print(f"警告: {model_type} - {message}")
+                return False, message
+            
+            # 对于空间分辨率，只要是合理范围内就接受
+            if actual_h < 64 or actual_w < 64 or actual_h > 512 or actual_w > 512:
+                message = f"空间分辨率超出合理范围: {actual_h}x{actual_w}"
                 if verbose:
                     print(f"警告: {model_type} - {message}")
                 return False, message

@@ -39,16 +39,18 @@ def _as_list(v):
 
 def generate_combinations(config):
     """
-    智能参数组合生成器，按照用户设计的逻辑处理模型-batch_size配对
+    智能参数组合生成器，支持分组式和传统式两种配置模式
     
-    设计逻辑：
-    1. 从YAML中获取model.type和hp.batch_size
-    2. 根据hp.batch_size数量判断：
-       - 如果hp.batch_size=1，扩充长度与model.type一致
-       - 如果hp.batch_size≠1且≠model.type长度，报错终止
-       - 如果hp.batch_size≠1且=model.type长度，按顺序配对
-    3. 根据models_to_train启用对应的配对
-    4. 将配对与其他参数进行笛卡尔组合
+    分组式设计逻辑：
+    1. 从YAML中获取groups配置，每组有自己的模型和超参数范围
+    2. 为每组内的参数进行笛卡尔积组合
+    3. 根据models_to_train过滤启用的模型
+    4. 避免无意义的模型-参数组合，节省算力
+    
+    传统式设计逻辑（兼容旧配置）：
+    1. 从grid中获取model.type和hp.batch_size
+    2. 处理模型-batch_size配对逻辑
+    3. 与其他参数进行笛卡尔组合
     
     Args:
         config (dict): 网格搜索配置
@@ -58,18 +60,157 @@ def generate_combinations(config):
     """
     gs = (config or {}).get("grid_search", {}) or {}
     fixed = gs.get("fixed", {}) or {}
-    grid = gs.get("grid", {}) or {}
+    models_to_train = config.get("models_to_train", [])
 
-    # 边界情况：无搜索参数时返回固定参数
-    if not grid:
+    # === 分组式配置处理 ===
+    if "groups" in gs and gs["groups"]:
+        print(f"📋 使用分组式网格搜索配置")
+        return _generate_combinations_by_groups(gs["groups"], fixed, models_to_train)
+    
+    # === 传统式配置处理（兼容旧格式） ===
+    elif "grid" in gs and gs["grid"]:
+        print(f"📋 使用传统式网格搜索配置")
+        return _generate_combinations_traditional(gs["grid"], fixed, models_to_train)
+    
+    # === 边界情况：无搜索参数 ===
+    else:
+        print(f"⚠️  未找到grid_search配置，返回固定参数")
         return [fixed] if fixed else [{}]
 
+
+def _generate_combinations_by_groups(groups_config, fixed, models_to_train):
+    """分组式参数组合生成器 - 支持组内模型-batch_size智能配对"""
+    all_combinations = []
+    total_groups = len(groups_config)
+    
+    print(f"🎯 发现 {total_groups} 个模型组:")
+    for group_name in groups_config.keys():
+        group_models = _as_list(groups_config[group_name].get("model.type", []))
+        print(f"   - {group_name}: {group_models}")
+    
+    for group_name, group_params in groups_config.items():
+        print(f"\n🔧 处理模型组: {group_name}")
+        
+        # === 第1步：获取组内的模型和batch_size ===
+        group_models = _as_list(group_params.get("model.type", []))
+        group_batch_sizes = _as_list(group_params.get("hp.batch_size", []))
+        
+        print(f"   📋 组内配置:")
+        print(f"      model.type: {group_models} (长度: {len(group_models)})")
+        print(f"      hp.batch_size: {group_batch_sizes} (长度: {len(group_batch_sizes)})")
+        
+        # === 第2步：处理模型-batch_size配对逻辑 ===
+        if group_batch_sizes:
+            if len(group_batch_sizes) == 1:
+                # 情况1：batch_size长度=1，扩充到与model.type一致
+                group_batch_sizes = group_batch_sizes * len(group_models)
+                print(f"   🔄 扩充batch_size: {group_batch_sizes} (扩充到与model.type长度一致)")
+                # 创建一对一配对字典
+                model_batch_dict = dict(zip(group_models, group_batch_sizes))
+                print(f"   📊 模型-batch_size配对字典: {model_batch_dict}")
+            elif len(group_batch_sizes) == len(group_models):
+                # 情况2：batch_size长度=model.type长度，按顺序配对
+                print(f"   ✅ 长度匹配，将按顺序配对")
+                model_batch_dict = dict(zip(group_models, group_batch_sizes))
+                print(f"   📊 模型-batch_size配对字典: {model_batch_dict}")
+            else:
+                # 情况3：batch_size长度≠1且≠model.type长度，作为独立参数处理
+                print(f"   🔄 batch_size作为独立参数处理，将与模型进行笛卡尔积组合")
+                model_batch_dict = None  # 标记为独立参数处理
+        else:
+            # 没有batch_size配置，所有模型使用默认值
+            model_batch_dict = {model: None for model in group_models}
+            print(f"   📊 无batch_size配置，使用默认值")
+        
+        # === 第4步：根据models_to_train过滤模型 ===
+        if models_to_train:
+            enabled_models = [model for model in group_models if model in models_to_train]
+            if not enabled_models:
+                print(f"   ⏭️  跳过组 {group_name}：无启用的模型")
+                continue
+            print(f"   🎯 启用的模型: {enabled_models}")
+        else:
+            enabled_models = group_models
+            print(f"   🎯 使用所有模型: {enabled_models}")
+        
+        # === 第5步：处理参数组合 ===
+        if model_batch_dict is not None:
+            # 有模型-batch_size配对的情况
+            enabled_pairs = {model: batch_size for model, batch_size in model_batch_dict.items() 
+                            if model in enabled_models}
+            print(f"   🎯 启用的模型配对: {enabled_pairs}")
+            
+            # 获取其他参数（排除model.type和hp.batch_size）
+            other_params = {k: v for k, v in group_params.items() 
+                           if k not in ["model.type", "hp.batch_size"]}
+            
+            # 生成组合
+            if not other_params:
+                # 只有模型-batch_size配对，无其他参数
+                for model, batch_size in enabled_pairs.items():
+                    combo = {**fixed, "model.type": model, "group": group_name}
+                    if batch_size is not None:
+                        combo["hp.batch_size"] = batch_size
+                    all_combinations.append(combo)
+            else:
+                # 有其他参数，进行笛卡尔积组合
+                param_items = [(k, _as_list(v)) for k, v in other_params.items() if _as_list(v)]
+                if param_items:
+                    param_keys, param_values_lists = zip(*param_items)
+                    for model, batch_size in enabled_pairs.items():
+                        for param_combo in itertools.product(*param_values_lists):
+                            combo = {
+                                **fixed,
+                                "model.type": model,
+                                "group": group_name
+                            }
+                            if batch_size is not None:
+                                combo["hp.batch_size"] = batch_size
+                            combo.update(dict(zip(param_keys, param_combo)))
+                            all_combinations.append(combo)
+                else:
+                    # 其他参数都为空
+                    for model, batch_size in enabled_pairs.items():
+                        combo = {**fixed, "model.type": model, "group": group_name}
+                        if batch_size is not None:
+                            combo["hp.batch_size"] = batch_size
+                        all_combinations.append(combo)
+        else:
+            # batch_size作为独立参数，与模型进行笛卡尔积组合
+            all_params = {k: v for k, v in group_params.items() if k != "model.type"}
+            param_items = [(k, _as_list(v)) for k, v in all_params.items() if _as_list(v)]
+            
+            if param_items:
+                param_keys, param_values_lists = zip(*param_items)
+                for model in enabled_models:
+                    for param_combo in itertools.product(*param_values_lists):
+                        combo = {
+                            **fixed,
+                            "model.type": model,
+                            "group": group_name
+                        }
+                        combo.update(dict(zip(param_keys, param_combo)))
+                        all_combinations.append(combo)
+            else:
+                # 无其他参数
+                for model in enabled_models:
+                    combo = {**fixed, "model.type": model, "group": group_name}
+                    all_combinations.append(combo)
+        
+        group_combinations = len([c for c in all_combinations if c.get("group") == group_name])
+        print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合")
+    
+    print(f"\n🎉 分组式搜索总计生成 {len(all_combinations)} 个组合")
+    return all_combinations
+
+
+def _generate_combinations_traditional(grid, fixed, models_to_train):
+    """传统式参数组合生成器（兼容旧配置）"""
     # === 第1步：获取参数 ===
     model_types = _as_list(grid.get("model.type", []))
     batch_sizes = _as_list(grid.get("hp.batch_size", []))
-    models_to_train = config.get("models_to_train", [])
 
-    print(f"📋 原始配置:")
+    print(f"📋 传统式配置:")
     print(f"   model.type: {model_types} (长度: {len(model_types)})")
     print(f"   hp.batch_size: {batch_sizes} (长度: {len(batch_sizes)})")
     print(f"   models_to_train: {models_to_train}")
@@ -174,11 +315,11 @@ def save_results_to_csv(results, filename):
 
     param_keys = sorted({k for r in results for k in r.get("params", {}).keys()})
 
-    # 将model.type移到第3列，其他参数按原顺序排列
-    other_param_keys = [k for k in param_keys if k != "model.type"]
+    # 将model.type移到第3列，group移到第4列，其他参数按原顺序排列
+    other_param_keys = [k for k in param_keys if k not in ["model.type", "group"]]
     
     fieldnames = [
-        "experiment_id", "exp_name", "model.type", "success",
+        "experiment_id", "exp_name", "model.type", "group", "success",
         "best_accuracy", "final_accuracy"
     ] + other_param_keys
 
@@ -273,9 +414,10 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
     cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
     cmd.extend(["--result_file", temp_result_file])  # 新增：指定结果文件
     
-    # 添加参数覆盖
+    # 添加参数覆盖（排除group参数，它只用于记录）
     for k, v in (params or {}).items():
-        cmd.extend([f"--{k}", str(v)])
+        if k != "group":  # group参数不传递给训练脚本
+            cmd.extend([f"--{k}", str(v)])
 
     # 清理环境变量并设置唯一端口
     env = os.environ.copy()

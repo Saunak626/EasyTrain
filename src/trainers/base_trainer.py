@@ -29,6 +29,11 @@ from src.utils.data_utils import set_seed
 # 工厂函数内部处理配置解析
 
 
+def is_main_process():
+    """检查是否为主进程（用于避免重复输出）"""
+    return int(os.environ.get("LOCAL_RANK", 0)) == 0
+
+
 # 支持的任务类型配置
 SUPPORTED_TASKS = {
     'image_classification': {
@@ -332,20 +337,22 @@ def run_training(config, exp_name=None):
 
     # 打印训练配置信息（仅在主进程）
     if accelerator.is_main_process:
-        print(f"========== 训练实验: {exp_name} ==========")
-        print(f"  任务类型: {task_tag} ({task_info['description']})")
-        print(f"  数据集: {dataset_type}")
-        print(f"  模型: {model_name}")
-        print(f"  超参数: {hyperparams}")
-        
-        # 显示关键参数的来源和值
-        data_pct = hyperparams.get('data_percentage', 1.0)
-        if data_pct < 1.0:
-            print(f"  🎯 数据采样比例: {data_pct:.1%} (来自命令行覆盖)")
-        else:
-            print(f"  📊 使用完整数据集 (data_percentage: {data_pct})")
-        
-        print("=" * 80)
+        # 只在主进程打印训练信息，避免重复输出
+        if is_main_process():
+            print(f"========== 训练实验: {exp_name} ==========")
+            print(f"  任务类型: {task_tag} ({task_info['description']})")
+            print(f"  数据集: {dataset_type}")
+            print(f"  模型: {model_name}")
+            print(f"  超参数: {hyperparams}")
+            
+            # 显示关键参数的来源和值
+            data_pct = hyperparams.get('data_percentage', 1.0)
+            if data_pct < 1.0:
+                print(f"  🎯 数据采样比例: {data_pct:.1%} (来自命令行覆盖)")
+            else:
+                print(f"  📊 使用完整数据集 (data_percentage: {data_pct})")
+            
+            print("=" * 80)
 
     # 设置结果目录
     result_dir = os.path.join("runs", exp_name) if exp_name else None

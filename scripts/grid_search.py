@@ -11,6 +11,8 @@ import sys
 import csv
 import json
 import random
+import fcntl
+import pandas as pd
 from datetime import datetime
 
 # 添加项目根目录到路径
@@ -296,8 +298,90 @@ def _generate_combinations_traditional(grid, fixed, models_to_train):
         print(f"🔧 生成 {len(combinations)} 个组合（{len(enabled_pairs)}个模型配对 × {len(list(itertools.product(*other_values_lists)))}个其他参数组合）")
         return combinations
 
+def get_csv_fieldnames(all_params):
+    """获取CSV文件的字段名列表"""
+    param_keys = sorted({k for params in all_params for k in params.keys()})
+    
+    # 将model.type移到第3列，group移到第4列，其他参数按原顺序排列
+    other_param_keys = [k for k in param_keys if k not in ["model.type", "group"]]
+    
+    fieldnames = [
+        "experiment_id", "exp_name", "model.type", "group", "success",
+        "best_accuracy", "final_accuracy"
+    ] + other_param_keys
+    
+    return fieldnames
+
+
+def initialize_csv_file(filepath, fieldnames):
+    """初始化CSV文件，写入表头"""
+    results_dir = os.path.dirname(filepath)
+    os.makedirs(results_dir, exist_ok=True)
+    
+    with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+
+def append_result_to_csv(result, filepath, fieldnames, experiment_id):
+    """实时追加单个结果到CSV文件（线程安全）
+    
+    Args:
+        result (dict): 实验结果
+        filepath (str): CSV文件路径
+        fieldnames (list): CSV字段名列表
+        experiment_id (int): 实验ID
+    """
+    try:
+        # 使用文件锁确保线程安全
+        with open(filepath, "a", newline="", encoding="utf-8") as csvfile:
+            # 获取文件锁
+            fcntl.flock(csvfile.fileno(), fcntl.LOCK_EX)
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            row = {
+                "experiment_id": f"{experiment_id:03d}",
+                "exp_name": result.get("exp_name"),
+                "success": result.get("success"),
+                "best_accuracy": result.get("best_accuracy"),
+                "final_accuracy": result.get("final_accuracy"),
+            }
+            row.update(result.get("params", {}))
+            
+            writer.writerow(row)
+            
+            # 释放文件锁
+            fcntl.flock(csvfile.fileno(), fcntl.LOCK_UN)
+            
+    except Exception as e:
+        print(f"⚠️  写入CSV失败: {e}")
+
+
+def load_completed_experiments(filepath):
+    """加载已完成的实验，支持断点续传
+    
+    Args:
+        filepath (str): CSV文件路径
+        
+    Returns:
+        set: 已完成的实验名称集合
+    """
+    if not os.path.exists(filepath):
+        return set()
+    
+    try:
+        df = pd.read_csv(filepath)
+        completed_experiments = set(df['exp_name'].tolist())
+        print(f"🔄 发现已完成的实验: {len(completed_experiments)} 个")
+        return completed_experiments
+    except Exception as e:
+        print(f"⚠️  读取已完成实验失败: {e}")
+        return set()
+
+
 def save_results_to_csv(results, filename):
-    """保存实验结果到CSV文件
+    """保存实验结果到CSV文件（兼容旧接口）
 
     Args:
         results (list[dict]): 实验结果列表
@@ -313,15 +397,9 @@ def save_results_to_csv(results, filename):
     os.makedirs(results_dir, exist_ok=True)
     filepath = os.path.join(results_dir, filename)
 
-    param_keys = sorted({k for r in results for k in r.get("params", {}).keys()})
-
-    # 将model.type移到第3列，group移到第4列，其他参数按原顺序排列
-    other_param_keys = [k for k in param_keys if k not in ["model.type", "group"]]
-    
-    fieldnames = [
-        "experiment_id", "exp_name", "model.type", "group", "success",
-        "best_accuracy", "final_accuracy"
-    ] + other_param_keys
+    # 获取所有参数的字段名
+    all_params = [r.get("params", {}) for r in results]
+    fieldnames = get_csv_fieldnames(all_params)
 
     with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -520,8 +598,41 @@ def run_grid_search(args):
     if len(combinations) > args.max_experiments:
         combinations = combinations[:args.max_experiments]
 
+    # 准备CSV文件
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_filename = f"grid_search_results_{timestamp}.csv"
+    results_dir = "runs"
+    csv_filepath = os.path.join(results_dir, results_filename)
+    
+    # 获取CSV字段名
+    all_params = [params for params in combinations]
+    fieldnames = get_csv_fieldnames(all_params)
+    
+    # 断点续传：检查已完成的实验
+    completed_experiments = set()
+    if args.save_results:
+        os.makedirs(results_dir, exist_ok=True)
+        # 检查是否有同名文件存在（用于断点续传）
+        existing_files = [f for f in os.listdir(results_dir) if f.startswith("grid_search_results_") and f.endswith(".csv")]
+        if existing_files:
+            latest_file = max(existing_files, key=lambda x: os.path.getctime(os.path.join(results_dir, x)))
+            latest_filepath = os.path.join(results_dir, latest_file)
+            completed_experiments = load_completed_experiments(latest_filepath)
+            
+            if completed_experiments:
+                # 使用已存在的文件继续写入
+                csv_filepath = latest_filepath
+                print(f"🔄 断点续传: 使用已存在的结果文件 {latest_file}")
+            else:
+                # 初始化新的CSV文件
+                initialize_csv_file(csv_filepath, fieldnames)
+        else:
+            # 初始化新的CSV文件
+            initialize_csv_file(csv_filepath, fieldnames)
+
     print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")
+    print(f"💾 结果文件: {csv_filepath}")
     
     # 显示全局参数覆盖
     if args.data_percentage is not None:
@@ -531,9 +642,25 @@ def run_grid_search(args):
 
     results = []
     successful = 0
+    skipped = 0
 
     for i, params in enumerate(combinations, 1):
+        exp_name = f"grid_{i:03d}"
+        
+        # 断点续传：跳过已完成的实验
+        if exp_name in completed_experiments:
+            print(f"⏭️  跳过已完成的实验 {i}/{len(combinations)}: {exp_name}")
+            skipped += 1
+            continue
+            
         print(f"📊 准备实验 {i}/{len(combinations)}")
+        
+        # 完整打印当前实验的超参数组合
+        print(f"🔧 实验参数组合:")
+        for key, value in params.items():
+            print(f"   {key}: {value}")
+        if args.data_percentage is not None:
+            print(f"   data_percentage: {args.data_percentage} (命令行覆盖)")
 
         # 将命令行参数添加到实验参数中
         experiment_params = params.copy()
@@ -549,11 +676,22 @@ def run_grid_search(args):
         results.append(result)
         if result["success"]:
             successful += 1
+            
+        # 实时写入CSV
+        if args.save_results:
+            append_result_to_csv(result, csv_filepath, fieldnames, i)
+            
+        # 实时显示最佳结果
+        if successful > 0:
+            current_best = max([r for r in results if r["success"]], key=lambda x: x["best_accuracy"])
+            print(f"🏆 当前最佳: {current_best['exp_name']} - {current_best['best_accuracy']:.2f}%")
 
     # 总结
     print("=" * 60)
     print(f"📈 网格搜索完成！")
     print(f"✅ 成功实验数量: {successful}/{len(combinations)}")
+    if skipped > 0:
+        print(f"⏭️  跳过已完成实验: {skipped} 个")
 
     if successful > 0:
         successful_results = [r for r in results if r["success"]]
@@ -571,11 +709,7 @@ def run_grid_search(args):
             print(f"{i}. {r['exp_name']} - {r['best_accuracy']:.2f}% - {r['params']}")
 
     if args.save_results:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_filename = f"grid_search_results_{timestamp}.csv"
-        saved_filepath = save_results_to_csv(results, results_filename)
-        if saved_filepath:
-            print(f"💾 结果已保存到: {saved_filepath}")
+        print(f"💾 结果已实时保存到: {csv_filepath}")
 
     return 0 if successful > 0 else 1
 

@@ -61,10 +61,14 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
             last_epoch=params.get('last_epoch', -1)
         )
     elif scheduler_name == "cosine":
+        # 支持eta_min_factor参数，计算最小学习率
+        eta_min_factor = params.get('eta_min_factor', 0.0)
+        eta_min = params.get('eta_min', learning_rate * eta_min_factor)
+
         return lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
             T_max=params.get('T_max', epochs),
-            eta_min=params.get('eta_min', 0),
+            eta_min=eta_min,
             last_epoch=params.get('last_epoch', -1)
         )
     elif scheduler_name == "exponential":
@@ -100,5 +104,36 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
             gamma=params.get('gamma', 0.1),
             last_epoch=params.get('last_epoch', -1)
         )
+    elif scheduler_name == "warmup_cosine":
+        # Warmup + Cosine Annealing scheduler
+        warmup_epochs = params.get('warmup_epochs', max(1, epochs // 10))  # 默认10%的epoch用于warmup
+        
+        # 创建组合调度器：先warmup，再cosine annealing
+        warmup_scheduler = lr_scheduler.LinearLR(
+            optimizer=optimizer,
+            start_factor=params.get('warmup_start_factor', 0.1),  # 从10%学习率开始
+            end_factor=1.0,  # 到达完整学习率
+            total_iters=warmup_epochs,
+            last_epoch=-1
+        )
+        
+        # 支持eta_min_factor参数，计算最小学习率
+        eta_min_factor = params.get('eta_min_factor', 0.01)
+        eta_min = params.get('eta_min', learning_rate * eta_min_factor)
+
+        cosine_scheduler = lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer,
+            T_max=epochs - warmup_epochs,  # 剩余的epoch用于cosine annealing
+            eta_min=eta_min,  # 最小学习率
+            last_epoch=-1
+        )
+        
+        # 使用SequentialLR组合两个调度器
+        return lr_scheduler.SequentialLR(
+            optimizer=optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs],
+            last_epoch=-1
+        )
     else:
-        raise ValueError(f"不支持的调度器: {scheduler_name}。支持的调度器: onecycle, step, cosine, exponential, plateau, linear, multistep")
+        raise ValueError(f"不支持的调度器: {scheduler_name}。支持的调度器: onecycle, step, cosine, exponential, plateau, linear, multistep, warmup_cosine")

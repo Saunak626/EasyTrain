@@ -116,6 +116,9 @@ def create_base_parser(description):
     parser.add_argument("--optimizer.params.weight_decay", type=float, help="权重衰减")
     parser.add_argument("--weight_decay", type=float, help="权重衰减")  # 兼容性参数
     parser.add_argument("--scheduler.name", type=str, help="调度器名称")
+    parser.add_argument("--scheduler.params.warmup_epochs", type=int, help="Warmup期长度")
+    parser.add_argument("--scheduler.params.warmup_start_factor", type=float, help="Warmup起始学习率比例")
+    parser.add_argument("--scheduler.params.eta_min_factor", type=float, help="最小学习率比例")
     parser.add_argument("--loss", type=str, help="损失函数类型")
     parser.add_argument("--loss.name", type=str, help="损失函数名称")
     

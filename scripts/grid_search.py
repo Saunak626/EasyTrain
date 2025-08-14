@@ -599,9 +599,14 @@ def run_grid_search(args):
         combinations = combinations[:args.max_experiments]
 
     # 准备CSV文件
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_filename = f"grid_search_results_{timestamp}.csv"
     results_dir = "runs"
+    if args.results_file:
+        # 使用命令行指定的文件名
+        results_filename = args.results_file
+    else:
+        # 使用默认的时间戳文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_filename = f"grid_search_results_{timestamp}.csv"
     csv_filepath = os.path.join(results_dir, results_filename)
     
     # 获取CSV字段名
@@ -612,23 +617,32 @@ def run_grid_search(args):
     completed_experiments = set()
     if args.save_results:
         os.makedirs(results_dir, exist_ok=True)
-        # 检查是否有同名文件存在（用于断点续传）
-        existing_files = [f for f in os.listdir(results_dir) if f.startswith("grid_search_results_") and f.endswith(".csv")]
-        if existing_files:
-            latest_file = max(existing_files, key=lambda x: os.path.getctime(os.path.join(results_dir, x)))
-            latest_filepath = os.path.join(results_dir, latest_file)
-            completed_experiments = load_completed_experiments(latest_filepath)
-            
+        
+        # 如果用户指定了结果文件，优先检查该文件
+        if args.results_file and os.path.exists(csv_filepath):
+            completed_experiments = load_completed_experiments(csv_filepath)
             if completed_experiments:
-                # 使用已存在的文件继续写入
-                csv_filepath = latest_filepath
-                print(f"🔄 断点续传: 使用已存在的结果文件 {latest_file}")
-            else:
-                # 初始化新的CSV文件
-                initialize_csv_file(csv_filepath, fieldnames)
+                print(f"🔄 断点续传: 使用指定的结果文件 {results_filename}")
         else:
-            # 初始化新的CSV文件
+            # 否则检查是否有其他结果文件存在（用于断点续传）
+            existing_files = [f for f in os.listdir(results_dir) if f.startswith("grid_search_results_") and f.endswith(".csv")]
+            if existing_files and not args.results_file:
+                latest_file = max(existing_files, key=lambda x: os.path.getctime(os.path.join(results_dir, x)))
+                latest_filepath = os.path.join(results_dir, latest_file)
+                completed_experiments = load_completed_experiments(latest_filepath)
+                
+                if completed_experiments:
+                    # 使用已存在的文件继续写入
+                    csv_filepath = latest_filepath
+                    results_filename = latest_file
+                    print(f"🔄 断点续传: 使用已存在的结果文件 {latest_file}")
+        
+        # 如果没有找到已完成的实验，初始化新的CSV文件
+        if not completed_experiments:
             initialize_csv_file(csv_filepath, fieldnames)
+    else:
+        # 不保存结果时也需要初始化
+        initialize_csv_file(csv_filepath, fieldnames)
 
     print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")

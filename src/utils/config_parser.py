@@ -33,18 +33,86 @@
 import argparse
 import yaml
 import os
+from typing import Dict, List, Tuple, Any, Optional
 
-def setup_gpu_config(config):
+# ============================================================================
+# 模块级常量：参数映射配置
+# ============================================================================
+
+# 基础超参数映射：(命令行参数名, HP配置键名)
+BASIC_PARAM_MAPPINGS: List[Tuple[str, str]] = [
+    ("learning_rate", "learning_rate"),
+    ("batch_size", "batch_size"),
+    ("epochs", "epochs"),
+    ("dropout", "dropout"),
+    ("data_percentage", "data_percentage"),
+]
+
+# 网格搜索参数映射：(网格配置键名, HP配置键名)
+GRID_PARAM_MAPPINGS: List[Tuple[str, str]] = [
+    ("hp.learning_rate", "learning_rate"),
+    ("hp.batch_size", "batch_size"),
+    ("hp.epochs", "epochs"),
+    ("hp.dropout", "dropout"),
+    ("hp.data_percentage", "data_percentage"),
+    # 兼容旧格式
+    ("learning_rate", "learning_rate"),
+    ("batch_size", "batch_size"),
+    ("epochs", "epochs"),
+    ("dropout", "dropout"),
+    ("data_percentage", "data_percentage"),
+]
+
+# ============================================================================
+# 辅助函数：配置处理工具
+# ============================================================================
+
+def set_nested_value(config_dict: Dict[str, Any], key_path: str, value: Any) -> None:
+    """设置嵌套字典的值，支持点号分隔的路径
+
+    Args:
+        config_dict: 目标配置字典
+        key_path: 点号分隔的键路径，如 'optimizer.params.weight_decay'
+        value: 要设置的值
+
+    Example:
+        set_nested_value(config, 'optimizer.name', 'adam')
+        # 等价于 config['optimizer']['name'] = 'adam'
+    """
+    keys = key_path.split('.')
+    current = config_dict
+    for key in keys[:-1]:
+        if key not in current:
+            current[key] = {}
+        current = current[key]
+    current[keys[-1]] = value
+
+
+def ensure_hp_section(config: Dict[str, Any]) -> Dict[str, Any]:
+    """确保配置中存在hp节点
+
+    Args:
+        config: 配置字典
+
+    Returns:
+        hp节点的引用
+    """
+    if "hp" not in config:
+        config["hp"] = {}
+    return config["hp"]
+
+
+def setup_gpu_config(config: Optional[Dict[str, Any]]) -> None:
     """GPU环境配置管理函数
-    
+
     设计思路：
     - 智能检测分布式训练环境，避免与Accelerate/torchrun框架冲突
     - 仅在主进程中设置GPU设备，子进程由框架自动管理
     - 通过环境变量CUDA_VISIBLE_DEVICES控制GPU可见性
-    
+
     Args:
-        config (dict): 包含GPU配置的字典，格式为 {"gpu": {"device_ids": "0,1,2"}}
-    
+        config: 包含GPU配置的字典，格式为 {"gpu": {"device_ids": "0,1,2"}}
+
     注意事项：
     - 在分布式训练中，LOCAL_RANK环境变量表示当前进程是子进程
     - 子进程的GPU分配由Accelerate框架自动处理，不应手动干预
@@ -62,27 +130,105 @@ def setup_gpu_config(config):
         os.environ["CUDA_VISIBLE_DEVICES"] = device_ids
         print(f"通过配置文件设置GPU: {device_ids}")
         
-def create_base_parser(description):
+# ============================================================================
+# 参数处理函数：职责分离的配置处理逻辑
+# ============================================================================
+
+def apply_grid_defaults_to_hp(config: Dict[str, Any], hp: Dict[str, Any]) -> None:
+    """从网格搜索配置中提取默认值到hp节点（仅单实验模式）
+
+    在单实验模式下，如果网格搜索配置中定义了参数列表，
+    则使用列表的第一个值作为默认值填充到hp节点中。
+
+    Args:
+        config: 完整配置字典
+        hp: hp节点的引用
+    """
+    if "grid_search" not in config or "grid" not in config["grid_search"]:
+        return
+
+    grid = config["grid_search"]["grid"]
+
+    for grid_key, hp_key in GRID_PARAM_MAPPINGS:
+        if grid_key in grid and isinstance(grid[grid_key], list) and hp_key not in hp:
+            hp[hp_key] = grid[grid_key][0]
+
+
+def apply_command_line_overrides(args: argparse.Namespace, hp: Dict[str, Any]) -> None:
+    """应用命令行参数覆盖到hp节点
+
+    将命令行中指定的基础参数值覆盖到hp配置中。
+    这些参数具有最高优先级，会覆盖配置文件和网格默认值。
+
+    Args:
+        args: 解析后的命令行参数
+        hp: hp节点的引用
+    """
+    for arg_name, hp_key in BASIC_PARAM_MAPPINGS:
+        arg_value = getattr(args, arg_name, None)
+        if arg_value is not None:
+            hp[hp_key] = arg_value
+
+
+def apply_nested_parameter_overrides(config: Dict[str, Any], args: argparse.Namespace) -> None:
+    """处理嵌套参数覆盖（点号分隔的参数）
+
+    处理形如 --optimizer.name, --model.type 等嵌套参数，
+    将其正确设置到配置字典的对应位置。
+
+    Args:
+        config: 完整配置字典
+        args: 解析后的命令行参数
+    """
+    for arg_name, arg_value in vars(args).items():
+        if arg_value is not None and '.' in arg_name:
+            set_nested_value(config, arg_name, arg_value)
+
+
+def apply_single_experiment_configs(config: Dict[str, Any], args: argparse.Namespace) -> None:
+    """应用单实验模式特有的配置
+
+    处理只在单实验模式下需要的配置，如实验名称和模型类型。
+
+    Args:
+        config: 完整配置字典
+        args: 解析后的命令行参数
+    """
+    # 处理实验名称
+    if args.exp_name is not None:
+        if "training" not in config:
+            config["training"] = {}
+        config["training"]["exp_name"] = args.exp_name
+
+    # 处理模型配置 - 支持两种参数名
+    model_type = getattr(args, 'model.type', None) or args.model_name
+    if model_type is not None:
+        if "model" not in config:
+            config["model"] = {}
+        config["model"]["type"] = model_type
+
+
+def create_base_parser(description: str) -> argparse.ArgumentParser:
     """
     创建基础参数解析器（统一网格搜索模式）
-    
+
     设计思路：
     - 统一参数定义：为网格搜索和单实验模式提供统一的参数接口
     - 分层参数设计：支持基础参数、网格搜索参数和嵌套参数三个层次
     - 灵活覆盖机制：命令行参数可以覆盖配置文件中的任何设置
     - 嵌套参数支持：使用点号分隔的参数名支持深层配置覆盖
-    
+
     参数分类：
     1. 基础参数：config, multi_gpu等控制训练环境的参数
     2. 网格搜索参数：max_experiments, save_results等控制搜索行为的参数
     3. 实验参数：learning_rate, batch_size等可被网格搜索的超参数
     4. 嵌套参数：optimizer.name, model.type等支持精确配置的参数
-    
+
     Args:
-        description (str): 解析器描述信息，用于帮助文档显示
-        
+        description: 解析器描述信息，用于帮助文档显示
+
     Returns:
-        argparse.ArgumentParser: 配置好的参数解析器，包含所有必要的参数定义
+        配置好的参数解析器，包含所有必要的参数定义
     """
     parser = argparse.ArgumentParser(description=description)
     
@@ -131,16 +277,17 @@ def create_base_parser(description):
     return parser
 
 
-def parse_arguments(mode="grid_search"):
+def parse_arguments(mode: str = "grid_search") -> Tuple[argparse.Namespace, Dict[str, Any]]:
     """解析命令行参数和YAML配置文件，支持参数覆盖
 
     支持网格搜索和单实验两种模式，将命令行参数与配置文件融合。
+    使用分离的函数处理不同类型的参数覆盖，提高代码可维护性。
 
     Args:
-        mode (str): 运行模式，'grid_search' 或 'single_experiment'
+        mode: 运行模式，'grid_search' 或 'single_experiment'
 
     Returns:
-        tuple: (args, config) 命令行参数和融合后的配置字典
+        (args, config) 命令行参数和融合后的配置字典
     """
     # 创建参数解析器
     if mode == "single_experiment":
@@ -155,89 +302,46 @@ def parse_arguments(mode="grid_search"):
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # 参数处理辅助函数
-    def set_nested_value(config_dict, key_path, value):
-        """设置嵌套字典的值，支持点号分隔的路径"""
-        keys = key_path.split('.')
-        current = config_dict
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-        current[keys[-1]] = value
-
-    def apply_parameter_overrides(config, args, mode):
-        """应用命令行参数覆盖配置文件设置"""
-        
-        # 确保hp节点存在
-        if "hp" not in config:
-            config["hp"] = {}
-        hp = config["hp"]
-        
-        # 单实验模式：从网格配置中提取默认值
-        if mode == "single_experiment" and "grid_search" in config and "grid" in config["grid_search"]:
-            grid = config["grid_search"]["grid"]
-
-            grid_mappings = [
-                ("hp.learning_rate", "learning_rate"),
-                ("hp.batch_size", "batch_size"), 
-                ("hp.epochs", "epochs"),
-                ("hp.dropout", "dropout"),
-                ("hp.data_percentage", "data_percentage"),
-                # 兼容旧格式
-                ("learning_rate", "learning_rate"),
-                ("batch_size", "batch_size"),
-                ("epochs", "epochs"),
-                ("dropout", "dropout"),
-                ("data_percentage", "data_percentage"),
-            ]
-            
-            for grid_key, hp_key in grid_mappings:
-                if grid_key in grid and isinstance(grid[grid_key], list) and hp_key not in hp:
-                    hp[hp_key] = grid[grid_key][0]
-        
-        # 应用命令行参数覆盖
-        param_mappings = [
-            ("learning_rate", "learning_rate"),
-            ("batch_size", "batch_size"),
-            ("epochs", "epochs"),
-            ("dropout", "dropout"),
-            ("data_percentage", "data_percentage"),
-        ]
-        
-        for arg_name, hp_key in param_mappings:
-            arg_value = getattr(args, arg_name, None)
-            if arg_value is not None:
-                hp[hp_key] = arg_value
-        
-        # 处理嵌套参数（点号分隔）
-        for arg_name, arg_value in vars(args).items():
-            if arg_value is not None and '.' in arg_name:
-                set_nested_value(config, arg_name, arg_value)
-
-        # 处理其他配置
-        if mode == "single_experiment":
-            # 处理实验名称
-            if args.exp_name is not None:
-                if "training" not in config:
-                    config["training"] = {}
-                config["training"]["exp_name"] = args.exp_name
-            
-            # 处理模型配置 - 支持两种参数名
-            model_type = getattr(args, 'model.type', None) or args.model_name
-            if model_type is not None:
-                if "model" not in config:
-                    config["model"] = {}
-                config["model"]["type"] = model_type
-        
-        return config
-    
-    # 应用统一的参数处理
+    # 应用参数覆盖逻辑（按优先级顺序）
     config = apply_parameter_overrides(config, args, mode)
 
     # 配置GPU环境
     setup_gpu_config(config)
 
     return args, config
+
+
+def apply_parameter_overrides(config: Dict[str, Any], args: argparse.Namespace, mode: str) -> Dict[str, Any]:
+    """应用命令行参数覆盖配置文件设置
+
+    使用分离的函数处理不同类型的参数覆盖，提高代码的可读性和可维护性。
+    处理顺序：确保hp节点 -> 网格默认值 -> 命令行覆盖 -> 嵌套参数 -> 模式特定配置
+
+    Args:
+        config: 原始配置字典
+        args: 解析后的命令行参数
+        mode: 运行模式（'grid_search' 或 'single_experiment'）
+
+    Returns:
+        处理后的配置字典
+    """
+    # 1. 确保hp节点存在
+    hp = ensure_hp_section(config)
+
+    # 2. 单实验模式：从网格配置中提取默认值
+    if mode == "single_experiment":
+        apply_grid_defaults_to_hp(config, hp)
+
+    # 3. 应用命令行参数覆盖到hp节点
+    apply_command_line_overrides(args, hp)
+
+    # 4. 处理嵌套参数（点号分隔）
+    apply_nested_parameter_overrides(config, args)
+
+    # 5. 应用模式特定的配置
+    if mode == "single_experiment":
+        apply_single_experiment_configs(config, args)
+
+    return config
 
 

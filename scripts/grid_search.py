@@ -41,22 +41,17 @@ def _as_list(v):
 
 def generate_combinations(config):
     """
-    智能参数组合生成器，支持分组式和传统式两种配置模式
-    
-    分组式设计逻辑：
+    分组式参数组合生成器
+
+    设计逻辑：
     1. 从YAML中获取groups配置，每组有自己的模型和超参数范围
     2. 为每组内的参数进行笛卡尔积组合
     3. 根据models_to_train过滤启用的模型
     4. 避免无意义的模型-参数组合，节省算力
-    
-    传统式设计逻辑（兼容旧配置）：
-    1. 从grid中获取model.type和hp.batch_size
-    2. 处理模型-batch_size配对逻辑
-    3. 与其他参数进行笛卡尔组合
-    
+
     Args:
         config (dict): 网格搜索配置
-            
+
     Returns:
         list[dict]: 参数组合列表，每个字典代表一组实验参数
     """
@@ -68,15 +63,10 @@ def generate_combinations(config):
     if "groups" in gs and gs["groups"]:
         print(f"📋 使用分组式网格搜索配置")
         return _generate_combinations_by_groups(gs["groups"], fixed, models_to_train)
-    
-    # === 传统式配置处理（兼容旧格式） ===
-    elif "grid" in gs and gs["grid"]:
-        print(f"📋 使用传统式网格搜索配置")
-        return _generate_combinations_traditional(gs["grid"], fixed, models_to_train)
-    
+
     # === 边界情况：无搜索参数 ===
     else:
-        print(f"⚠️  未找到grid_search配置，返回固定参数")
+        print(f"⚠️  未找到groups配置，返回固定参数")
         return [fixed] if fixed else [{}]
 
 
@@ -199,104 +189,42 @@ def _generate_combinations_by_groups(groups_config, fixed, models_to_train):
                     combo = {**fixed, "model.type": model, "group": group_name}
                     all_combinations.append(combo)
         
+        # 计算当前组的组合数量和计算过程
         group_combinations = len([c for c in all_combinations if c.get("group") == group_name])
-        print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合")
+
+        # 计算组合数量的分解
+        if model_batch_dict is not None:
+            # 有模型-batch_size配对的情况
+            model_count = len(enabled_pairs)
+            other_params = {k: v for k, v in group_params.items()
+                           if k not in ["model.type", "hp.batch_size"]}
+            param_items = [(k, _as_list(v)) for k, v in other_params.items() if _as_list(v)]
+            if param_items:
+                param_counts = [len(_as_list(v)) for _, v in other_params.items() if _as_list(v)]
+                other_count = 1
+                for count in param_counts:
+                    other_count *= count
+                print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合 ({model_count}模型 × {other_count}参数组合)")
+            else:
+                print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合 ({model_count}模型)")
+        else:
+            # batch_size作为独立参数的情况
+            model_count = len(enabled_models)
+            all_params = {k: v for k, v in group_params.items() if k != "model.type"}
+            param_items = [(k, _as_list(v)) for k, v in all_params.items() if _as_list(v)]
+            if param_items:
+                param_counts = [len(_as_list(v)) for _, v in all_params.items() if _as_list(v)]
+                other_count = 1
+                for count in param_counts:
+                    other_count *= count
+                print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合 ({model_count}模型 × {other_count}参数组合)")
+            else:
+                print(f"   ✅ 组 {group_name} 生成 {group_combinations} 个组合 ({model_count}模型)")
     
     print(f"\n🎉 分组式搜索总计生成 {len(all_combinations)} 个组合")
     return all_combinations
 
 
-def _generate_combinations_traditional(grid, fixed, models_to_train):
-    """传统式参数组合生成器（兼容旧配置）"""
-    # === 第1步：获取参数 ===
-    model_types = _as_list(grid.get("model.type", []))
-    batch_sizes = _as_list(grid.get("hp.batch_size", []))
-
-    print(f"📋 传统式配置:")
-    print(f"   model.type: {model_types} (长度: {len(model_types)})")
-    print(f"   hp.batch_size: {batch_sizes} (长度: {len(batch_sizes)})")
-    print(f"   models_to_train: {models_to_train}")
-
-    # === 第2步：长度检查和处理 ===
-    if len(batch_sizes) == 1:
-        # 情况1：batch_size长度=1，扩充到与model.type一致
-        batch_sizes = batch_sizes * len(model_types)
-        print(f"🔄 扩充batch_size: {batch_sizes} (扩充到与model.type长度一致)")
-    elif len(batch_sizes) != len(model_types):
-        # 情况2：batch_size长度≠1且≠model.type长度，报错
-        raise ValueError(
-            f"❌ 配置错误: hp.batch_size长度({len(batch_sizes)}) 必须等于1或等于model.type长度({len(model_types)})\n"
-            f"   model.type: {model_types}\n"
-            f"   hp.batch_size: {batch_sizes}\n"
-            f"   请修改config/ucf101_video_grid.yaml中的配置"
-        )
-    else:
-        # 情况3：batch_size长度=model.type长度，按顺序配对
-        print(f"✅ 长度匹配，将按顺序配对")
-
-    # === 第3步：创建模型-batch_size配对字典 ===
-    model_batch_dict = dict(zip(model_types, batch_sizes))
-    print(f"📊 模型-batch_size配对字典: {model_batch_dict}")
-
-    # === 第4步：根据models_to_train过滤配对 ===
-    if models_to_train:
-        # 过滤出启用的模型配对
-        enabled_pairs = {model: batch_size for model, batch_size in model_batch_dict.items() 
-                        if model in models_to_train}
-        if not enabled_pairs:
-            raise ValueError(f"❌ models_to_train中的模型 {models_to_train} 在model.type中未找到")
-        print(f"🎯 根据models_to_train启用的配对: {enabled_pairs}")
-    else:
-        # 如果未配置models_to_train，使用所有配对
-        enabled_pairs = model_batch_dict
-        print(f"🎯 使用所有模型配对: {enabled_pairs}")
-
-    # === 第5步：获取其他参数 ===
-    other_grid = {k: v for k, v in grid.items() 
-                 if k not in ["model.type", "hp.batch_size"]}
-    
-    # === 第6步：生成笛卡尔组合 ===
-    if not other_grid:
-        # 只有模型-batch_size配对，无其他参数
-        combinations = []
-        for model_type, batch_size in enabled_pairs.items():
-            combinations.append({
-                **fixed, 
-                "model.type": model_type, 
-                "hp.batch_size": batch_size
-            })
-        print(f"🔧 生成 {len(combinations)} 个基础组合（无其他参数）")
-        return combinations
-    else:
-        # 有其他参数，进行笛卡尔积组合
-        other_valid_items = [(k, _as_list(v)) for k, v in other_grid.items() if _as_list(v)]
-        if not other_valid_items:
-            # 其他参数都为空
-            combinations = []
-            for model_type, batch_size in enabled_pairs.items():
-                combinations.append({
-                    **fixed, 
-                    "model.type": model_type, 
-                    "hp.batch_size": batch_size
-                })
-            return combinations
-        
-        # 进行笛卡尔积组合
-        other_keys, other_values_lists = zip(*other_valid_items)
-        combinations = []
-        
-        for model_type, batch_size in enabled_pairs.items():
-            for other_combo in itertools.product(*other_values_lists):
-                combo = {
-                    **fixed, 
-                    "model.type": model_type, 
-                    "hp.batch_size": batch_size
-                }
-                combo.update(dict(zip(other_keys, other_combo)))
-                combinations.append(combo)
-        
-        print(f"🔧 生成 {len(combinations)} 个组合（{len(enabled_pairs)}个模型配对 × {len(list(itertools.product(*other_values_lists)))}个其他参数组合）")
-        return combinations
 
 def get_csv_fieldnames(all_params):
     """获取CSV文件的字段名列表"""
@@ -572,11 +500,7 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
     """
     exp_name = f"grid_{exp_id}"
 
-    print(f"{'='*60}")
-    print(f"🚀 开始实验 {exp_id}: {exp_name}")
-    print(f"📋 参数: {params}")
-    print(f"🎯 多卡训练: {'是' if use_multi_gpu else '否'}")
-    print(f"{'='*60}")
+    # 实验信息将在训练器中的SwanLab启动后显示
 
     if use_multi_gpu:
         # 多卡训练：使用子进程方式
@@ -669,13 +593,6 @@ def run_grid_search(args):
             
         print(f"📊 准备实验 {i}/{len(combinations)}")
         
-        # 完整打印当前实验的超参数组合
-        print(f"🔧 实验参数组合:")
-        for key, value in params.items():
-            print(f"   {key}: {value}")
-        if args.data_percentage is not None:
-            print(f"   data_percentage: {args.data_percentage} (命令行覆盖)")
-
         # 将命令行参数添加到实验参数中
         experiment_params = params.copy()
         if args.data_percentage is not None:

@@ -91,8 +91,9 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             total = len(dataset)
             sample_size = max(1, int(total * data_percentage))
             indices = torch.randperm(total)[:sample_size]
-            if is_main_process():
-                print(f"📊 数据子采样 - {split_name}: {total} -> {sample_size} 样本 (比例: {data_percentage:.1%})")
+            # 数据子采样信息将在训练器中统一显示
+            # if is_main_process():
+            #     print(f"📊 数据子采样 - {split_name}: {total} -> {sample_size} 样本 (比例: {data_percentage:.1%})")
             return Subset(dataset, indices)
         
         original_train_size = len(train_dataset)
@@ -101,11 +102,12 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         train_dataset = _sample_subset(train_dataset, "训练集")
         test_dataset = _sample_subset(test_dataset, "测试集")
         
-        if is_main_process():
-            print(f"🎯 数据采样完成 - 训练集: {original_train_size} -> {len(train_dataset)}, 测试集: {original_test_size} -> {len(test_dataset)}")
-    else:
-        if is_main_process():
-            print(f"📊 使用完整数据集 - 训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} 样本")
+        # 数据采样信息将在训练器中统一显示
+        # if is_main_process():
+        #     print(f"🎯 数据采样完成 - 训练集: {original_train_size} -> {len(train_dataset)}, 测试集: {original_test_size} -> {len(test_dataset)}")
+    # else:
+        # if is_main_process():
+        #     print(f"📊 使用完整数据集 - 训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} 样本")
 
     # 创建数据加载器
     train_loader = DataLoader(

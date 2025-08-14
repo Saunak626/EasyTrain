@@ -312,6 +312,8 @@ def run_training(config, exp_name=None):
         }
     )
 
+    # SwanLab初始化完成，实验信息将在数据加载后统一显示
+
     # === 第3步：获取模型配置（用于数据预处理） ===
     model_config = config.get('model', {})
     model_name = model_config.get('type',
@@ -372,27 +374,44 @@ def run_training(config, exp_name=None):
         model, optimizer, lr_scheduler, train_dataloader, test_dataloader
     )
 
-    # 打印训练配置信息（仅在主进程）
+    # 合并显示完整的实验配置信息（仅在主进程）
     if accelerator.is_main_process:
         # 只在主进程打印训练信息，避免重复输出
         if is_main_process():
-            print(f"========== 训练实验: {exp_name} ==========")
-            print(f"  任务类型: {task_tag} ({task_info['description']})")
-            print(f"  数据集: {dataset_type}")
-            print(f"  模型: {model_name}")
-            print(f"  超参数: {hyperparams}")
-            
-            # 显示关键参数的来源和值
-            data_pct = hyperparams.get('data_percentage', 1.0)
-            if data_pct < 1.0:
-                print(f"  🎯 数据采样比例: {data_pct:.1%} (来自命令行覆盖)")
-            else:
-                print(f"  📊 使用完整数据集 (data_percentage: {data_pct})")
-            
-            print("=" * 80)
+            print(f"🚀 ========== 训练实验开始 ==========")
+            print(f"📋 实验配置:")
+            print(f"  └─ 实验名称: {exp_name}")
+            print(f"  └─ 任务类型: {task_info['description']} ({dataset_type.upper()})")
 
-    # 设置结果目录
-    result_dir = os.path.join("runs", exp_name) if exp_name else None
+            # 获取模型参数信息
+            total_params = sum(p.numel() for p in model.parameters())
+            model_size_mb = total_params * 4 / (1024 * 1024)  # 假设float32
+
+            print(f"  └─ 模型架构: {model_name} ({total_params/1e6:.1f}M参数, {model_size_mb:.1f}MB)")
+            print(f"  └─ 数据配置: 训练集 {len(train_dataloader.dataset):,} | 测试集 {len(test_dataloader.dataset):,} | 使用比例 {hyperparams.get('data_percentage', 1.0):.0%}")
+            print(f"  └─ 训练配置: {hyperparams['epochs']} epochs | batch_size {hyperparams['batch_size']} | 初始LR {hyperparams['learning_rate']}")
+
+            # 调度器信息
+            scheduler_name = scheduler_config.get('name', 'default')
+            scheduler_params = []
+            if scheduler_name == 'warmup_cosine':
+                warmup_epochs = scheduler_config.get('params', {}).get('warmup_epochs', 1)
+                eta_min_factor = scheduler_config.get('params', {}).get('eta_min_factor', 0.01)
+                scheduler_params.append(f"warmup_epochs={warmup_epochs}")
+                scheduler_params.append(f"eta_min_factor={eta_min_factor}")
+
+            scheduler_info = f"{scheduler_name}"
+            if scheduler_params:
+                scheduler_info += f" ({', '.join(scheduler_params)})"
+            print(f"  └─ 调度策略: {scheduler_info}")
+
+            # 优化器信息
+            optimizer_name = config.get('optimizer', {}).get('name', 'adam')
+            weight_decay = config.get('optimizer', {}).get('params', {}).get('weight_decay', 0)
+            print(f"  └─ 优化器配置: {optimizer_name} (weight_decay={weight_decay})")
+            print(f"  └─ 多卡训练: {'是' if accelerator.num_processes > 1 else '否'}")
+
+            print("═" * 63)
 
     # 初始化最佳准确率追踪
     best_accuracy = 0.0
@@ -403,16 +422,14 @@ def run_training(config, exp_name=None):
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
-            # tqdm.write(f"Epoch {epoch}/{hyperparams['epochs']}")
-
             # 打印epoch开始时的学习率信息
             lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
             print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
 
         # 训练epoch
-        train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
+        train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
         # 测试epoch
-        val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
+        _, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
 
         # 打印epoch结束时的学习率信息
         if accelerator.is_main_process:

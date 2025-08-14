@@ -129,19 +129,19 @@ class VideoNetModel(nn.Module):
         else:
             raise ValueError(f"不支持的视频模型: {self.model_type}")
         
-        # 打印权重加载信息和预训练数据集信息
-        if self.pretrained:
-            pretrain_info = self._get_pretrain_info()
-            print(
-                f"✅ 已加载 {self.model_type} 预训练权重 | "
-                f"📊 数据集: {pretrain_info['dataset']} | "
-                f"🎯 类别: {pretrain_info['classes']} | "
-                f"🔧 策略: 保持预训练分类头 + 自定义分类器"
-            )
-            if pretrain_info['note']:
-                print(f"   💡 注意: {pretrain_info['note']}")
-        else:
-            print(f"⚠️  {self.model_type} 使用随机初始化权重")
+        # 简化权重加载信息，避免冗余输出
+        # if self.pretrained:
+        #     pretrain_info = self._get_pretrain_info()
+        #     print(
+        #         f"✅ 已加载 {self.model_type} 预训练权重 | "
+        #         f"📊 数据集: {pretrain_info['dataset']} | "
+        #         f"🎯 类别: {pretrain_info['classes']} | "
+        #         f"🔧 策略: 保持预训练分类头 + 自定义分类器"
+        #     )
+        #     if pretrain_info['note']:
+        #         print(f"   💡 注意: {pretrain_info['note']}")
+        # else:
+        #     print(f"⚠️  {self.model_type} 使用随机初始化权重")
         
         return model
     
@@ -354,13 +354,14 @@ def get_video_model(model_type, num_classes=101, **kwargs):
     freeze_backbone = kwargs.get('freeze_backbone', model_config['freeze_backbone'])
     debug = kwargs.get('debug', False)
     
-    print(
-        f"🏗️ 创建 {model_type} 模型 | "
-        f"🎯 特征维度: {feature_dim} | "
-        f"🧊 冻结骨干: {'是' if freeze_backbone else '否'} | "
-        f"📚 建议学习率: {model_config['suggested_lr']} | "
-        f"📦 建议批大小: {model_config['suggested_batch_size']}"
-    )
+    # 简化模型创建信息，避免与训练器中的信息重复
+    # print(
+    #     f"🏗️ 创建 {model_type} 模型 | "
+    #     f"🎯 特征维度: {feature_dim} | "
+    #     f"🧊 冻结骨干: {'是' if freeze_backbone else '否'} | "
+    #     f"📚 建议学习率: {model_config['suggested_lr']} | "
+    #     f"📦 建议批大小: {model_config['suggested_batch_size']}"
+    # )
     
     model = VideoNetModel(
         model_type=model_type,

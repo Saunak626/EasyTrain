@@ -10,6 +10,7 @@ import sys
 import json
 import torch
 import torch.nn as nn
+from typing import Dict, Any, Tuple, Optional
 
 from tqdm import tqdm
 from accelerate import Accelerator
@@ -25,14 +26,19 @@ from src.optimizers.optimizer_factory import get_optimizer    # 优化器工厂�
 from src.schedules.scheduler_factory import get_scheduler     # 学习率调度器工厂函数
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
-# GPU监控功能已移除
-# 工厂函数内部处理配置解析
 
+# ============================================================================
+# 模块级常量配置
+# ============================================================================
 
-def is_main_process():
-    """检查是否为主进程（用于避免重复输出）"""
-    return int(os.environ.get("LOCAL_RANK", 0)) == 0
-
+# 训练相关常量
+TRAINING_CONSTANTS = {
+    'default_seed': 42,
+    'default_num_workers': 8,
+    'progress_update_interval': 10,
+    'model_size_bytes_per_param': 4,  # float32
+    'bytes_to_mb': 1024 * 1024
+}
 
 # 支持的任务类型配置
 SUPPORTED_TASKS = {
@@ -49,6 +55,73 @@ SUPPORTED_TASKS = {
         'default_model': 'r3d_18'
     }
 }
+
+# ============================================================================
+# 进度条管理类
+# ============================================================================
+
+class ProgressBarManager:
+    """统一的进度条管理器
+
+    负责创建和管理训练、测试阶段的进度条，避免重复的进度条创建逻辑。
+    """
+
+    def __init__(self, accelerator: Accelerator):
+        """初始化进度条管理器
+
+        Args:
+            accelerator: Accelerator实例，用于检查是否为主进程
+        """
+        self.accelerator = accelerator
+
+    def create_training_progress_bar(self, dataloader, epoch: int) -> Optional[tqdm]:
+        """创建训练进度条
+
+        Args:
+            dataloader: 训练数据加载器
+            epoch: 当前epoch编号
+
+        Returns:
+            进度条实例，如果不是主进程则返回None
+        """
+        if self.accelerator.is_main_process:
+            return tqdm(
+                total=len(dataloader),
+                desc=f"Epoch {epoch} Training",
+                unit="batch",
+                dynamic_ncols=True,
+                leave=False,
+            )
+        return None
+
+    def create_testing_progress_bar(self, dataloader, epoch: int) -> Optional[tqdm]:
+        """创建测试进度条
+
+        Args:
+            dataloader: 测试数据加载器
+            epoch: 当前epoch编号
+
+        Returns:
+            进度条实例，如果不是主进程则返回None
+        """
+        if self.accelerator.is_main_process:
+            return tqdm(
+                total=len(dataloader),
+                desc=f"Epoch {epoch} Testing",
+                unit="batch",
+                dynamic_ncols=True,
+                leave=False,
+            )
+        return None
+
+
+# ============================================================================
+# 辅助函数
+# ============================================================================
+
+def is_main_process() -> bool:
+    """检查是否为主进程（用于避免重复输出）"""
+    return int(os.environ.get("LOCAL_RANK", 0)) == 0
 
 
 def get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr):
@@ -107,14 +180,9 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     total_loss = 0.0
     num_batches = 0
 
-    if accelerator.is_main_process:
-        progress_bar = tqdm(
-            total=len(dataloader),
-            desc=f"Epoch {epoch} Training",
-            unit="batch",
-            dynamic_ncols=True,
-            leave=False,
-        )
+    # 使用统一的进度条管理器
+    progress_manager = ProgressBarManager(accelerator)
+    progress_bar = progress_manager.create_training_progress_bar(dataloader, epoch)
 
     for batch_idx, (inputs, targets) in enumerate(dataloader):
         outputs = model(inputs)
@@ -130,10 +198,8 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
 
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
-        # GPU监控功能已移除
-
         # 更新进度条
-        if accelerator.is_main_process and batch_idx % 10 == 0:
+        if progress_bar and batch_idx % TRAINING_CONSTANTS['progress_update_interval'] == 0:
             current_lr = optimizer.param_groups[0]['lr']
             avg_loss = total_loss / num_batches
             progress_bar.set_postfix(
@@ -141,14 +207,12 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
                 lr=f"{current_lr:.2e}"
             )
 
-        if accelerator.is_main_process:
+        if progress_bar:
             progress_bar.update(1)
 
     # 关闭进度条
-    if accelerator.is_main_process:
+    if progress_bar:
         progress_bar.close()
-
-    # GPU监控功能已移除
 
     # 返回平均训练损失
     avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -158,7 +222,7 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
 def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=None):
     """
     执行单个测试轮次
-    
+
     该函数在测试集上评估模型性能，计算平均损失和准确率。
     支持多GPU环境下的指标聚合，确保结果的准确性。
 
@@ -181,15 +245,9 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     local_correct = torch.tensor(0, device=device)     # 当前GPU的正确预测数
     local_samples = torch.tensor(0, device=device)     # 当前GPU的样本总数
 
-    # 只在主进程显示进度条
-    if accelerator.is_main_process:
-        progress_bar = tqdm(
-            total=len(dataloader),
-            desc=f"Epoch {epoch} Testing",
-            unit="batch",
-            dynamic_ncols=True,
-            leave=False,
-        )
+    # 使用统一的进度条管理器
+    progress_manager = ProgressBarManager(accelerator)
+    progress_bar = progress_manager.create_testing_progress_bar(dataloader, epoch)
 
     # 禁用梯度计算以节省内存和加速推理
     with torch.no_grad():
@@ -210,11 +268,11 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
             local_samples += batch_size
 
             # 更新进度条
-            if accelerator.is_main_process:
+            if progress_bar:
                 progress_bar.update(1)
 
     # 关闭进度条
-    if accelerator.is_main_process:
+    if progress_bar:
         progress_bar.close()
 
     # 跨所有GPU进程聚合统计指标
@@ -245,31 +303,33 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     return None, None
 
 
-def run_training(config, exp_name=None):
-    """
-    训练的主入口函数，负责整个训练过程的协调，包括：
-    - 环境初始化（随机种子、实验追踪）
-    - 数据加载器创建
-    - 模型、损失函数、优化器初始化
-    - 多GPU环境配置
-    - 训练循环执行
-    - 结果记录和返回
+# ============================================================================
+# 训练流程拆分函数
+# ============================================================================
+
+def setup_experiment(config: Dict[str, Any], exp_name: Optional[str] = None) -> Tuple[str, Dict[str, Any], str, Dict[str, Any], Accelerator]:
+    """实验环境初始化
+
+    负责设置随机种子、解析任务配置、验证数据集兼容性，并初始化Accelerator和SwanLab追踪。
 
     Args:
-        config (dict): 包含所有训练配置的字典，包括模型、数据、超参数等设置
-        exp_name (str, optional): 实验名称，用于追踪和日志记录
+        config: 包含所有训练配置的字典
+        exp_name: 实验名称，用于追踪和日志记录
 
     Returns:
-        dict: 训练结果字典，包含实验名称、最佳准确率和配置信息
+        Tuple[实验名称, 任务信息, 任务标签, 数据配置, Accelerator实例]
+
+    Raises:
+        ValueError: 当任务类型不支持或数据集不兼容时
     """
     # 设置随机种子确保实验可重现性
-    set_seed(42)
+    set_seed(TRAINING_CONSTANTS['default_seed'])
 
     # 实验名称，优先使用传入函数的参数
     if exp_name is None:
         exp_name = config['training']['exp_name']
 
-    # === 第1步：解析任务配置 ===
+    # 解析任务配置
     task_config = config.get('task', {})
     task_tag = task_config.get('tag')
 
@@ -282,7 +342,7 @@ def run_training(config, exp_name=None):
 
     task_info = SUPPORTED_TASKS[task_tag]
 
-    # === 第2步：解析和验证数据配置 ===
+    # 解析和验证数据配置
     data_config = config.get('data', {})
     dataset_type = data_config.get('type', 'cifar10')
 
@@ -294,15 +354,13 @@ def run_training(config, exp_name=None):
     # 初始化Accelerator，指定swanlab为日志记录工具
     accelerator = Accelerator(log_with="swanlab")
 
-    # GPU监控功能已移除
-
     # 记录到SwanLab的超参数
     hyperparams = config['hp']
     tracker_config = {**hyperparams, "exp_name": exp_name, "task_tag": task_tag}
 
     # 初始化SwanLab实验追踪器
     accelerator.init_trackers(
-        project_name=config['swanlab']['project_name'], # SwanLab UI中项目名称
+        project_name=config['swanlab']['project_name'],  # SwanLab UI中项目名称
         config=tracker_config,    # 要记录的超参数
         init_kwargs={             # 额外初始化参数
             "swanlab": {
@@ -312,31 +370,45 @@ def run_training(config, exp_name=None):
         }
     )
 
-    # SwanLab初始化完成，实验信息将在数据加载后统一显示
+    return exp_name, task_info, task_tag, data_config, accelerator
 
-    # === 第3步：获取模型配置（用于数据预处理） ===
+
+def setup_data_and_model(config: Dict[str, Any], task_info: Dict[str, Any], data_config: Dict[str, Any], accelerator: Accelerator) -> Tuple:
+    """数据和模型初始化
+
+    负责创建数据加载器、获取数据集信息、创建模型。
+
+    Args:
+        config: 完整配置字典
+        task_info: 任务信息字典
+        data_config: 数据配置字典
+        accelerator: Accelerator实例
+
+    Returns:
+        Tuple[训练数据加载器, 测试数据加载器, 模型, 数据集信息]
+    """
+    # 获取超参数和模型配置
+    hyperparams = config['hp']
     model_config = config.get('model', {})
-    model_name = model_config.get('type',
-                                 model_config.get('name', task_info['default_model']))
+    dataset_type = data_config.get('type', 'cifar10')
+    model_name = model_config.get('type', model_config.get('name', task_info['default_model']))
 
     # 使用简化的数据加载器创建函数
     train_dataloader, test_dataloader, num_classes = create_dataloaders(
         dataset_name=dataset_type,
         data_dir=data_config.get('root', './data'),
         batch_size=hyperparams['batch_size'],
-        num_workers=data_config.get('num_workers', 8),
+        num_workers=data_config.get('num_workers', TRAINING_CONSTANTS['default_num_workers']),
         model_type=model_name,  # 传递模型类型用于动态transforms
         data_percentage=hyperparams.get('data_percentage', 1.0),
         **data_config.get('params', {})
     )
 
-    # === 第4步：获取数据集信息 ===
+    # 获取数据集信息
     dataset_info = get_dataset_info(dataset_type)
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
-    # === 第5步：基于任务类型创建模型 ===
-
-    # 使用任务驱动的模型工厂选择
+    # 基于任务类型创建模型
     model_factory_name = task_info['model_factory']
     model_factory = globals()[model_factory_name]
 
@@ -348,6 +420,25 @@ def run_training(config, exp_name=None):
         model_type=model_name,
         **model_params
     )
+
+    return train_dataloader, test_dataloader, model, dataset_info
+
+
+def setup_training_components(config: Dict[str, Any], model, train_dataloader, accelerator: Accelerator) -> Tuple:
+    """优化器、调度器、损失函数初始化
+
+    负责创建损失函数、优化器和学习率调度器，并使用Accelerator包装所有组件。
+
+    Args:
+        config: 完整配置字典
+        model: 已创建的模型
+        train_dataloader: 训练数据加载器
+        accelerator: Accelerator实例
+
+    Returns:
+        Tuple[损失函数, 优化器, 学习率调度器]
+    """
+    hyperparams = config['hp']
 
     # 创建损失函数 - 使用工厂函数
     loss_fn = get_loss_function(config.get('loss', {}))
@@ -363,64 +454,99 @@ def run_training(config, exp_name=None):
 
     lr_scheduler = get_scheduler(optimizer, scheduler_config, hyperparams)
 
-    # 使用Accelerator包装所有训练组件，自动处理多GPU分布式训练
-    
-    # # 清理GPU缓存，释放未使用的内存
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    return loss_fn, optimizer, lr_scheduler
 
-    # 使用Accelerator包装训练组件，自动处理分布式训练
-    model, optimizer, lr_scheduler, train_dataloader, test_dataloader = accelerator.prepare(
-        model, optimizer, lr_scheduler, train_dataloader, test_dataloader
-    )
 
-    # 合并显示完整的实验配置信息（仅在主进程）
-    if accelerator.is_main_process:
-        # 只在主进程打印训练信息，避免重复输出
-        if is_main_process():
-            print(f"🚀 ========== 训练实验开始 ==========")
-            print(f"📋 实验配置:")
-            print(f"  └─ 实验名称: {exp_name}")
-            print(f"  └─ 任务类型: {task_info['description']} ({dataset_type.upper()})")
+def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict[str, Any],
+                         dataset_info: Dict[str, Any], model, train_dataloader, test_dataloader,
+                         accelerator: Accelerator) -> None:
+    """实验信息打印
 
-            # 获取模型参数信息
-            total_params = sum(p.numel() for p in model.parameters())
-            model_size_mb = total_params * 4 / (1024 * 1024)  # 假设float32
+    负责打印完整的实验配置信息，包括模型、数据、训练配置等。
 
-            print(f"  └─ 模型架构: {model_name} ({total_params/1e6:.1f}M参数, {model_size_mb:.1f}MB)")
-            print(f"  └─ 数据配置: 训练集 {len(train_dataloader.dataset):,} | 测试集 {len(test_dataloader.dataset):,} | 使用比例 {hyperparams.get('data_percentage', 1.0):.0%}")
-            print(f"  └─ 训练配置: {hyperparams['epochs']} epochs | batch_size {hyperparams['batch_size']} | 初始LR {hyperparams['learning_rate']}")
+    Args:
+        config: 完整配置字典
+        exp_name: 实验名称
+        task_info: 任务信息字典
+        dataset_info: 数据集信息字典
+        model: 已创建的模型
+        train_dataloader: 训练数据加载器
+        test_dataloader: 测试数据加载器
+        accelerator: Accelerator实例
+    """
+    if not (accelerator.is_main_process and is_main_process()):
+        return
 
-            # 调度器信息
-            scheduler_name = scheduler_config.get('name', 'default')
-            scheduler_params = []
-            if scheduler_name == 'warmup_cosine':
-                warmup_epochs = scheduler_config.get('params', {}).get('warmup_epochs', 1)
-                eta_min_factor = scheduler_config.get('params', {}).get('eta_min_factor', 0.01)
-                scheduler_params.append(f"warmup_epochs={warmup_epochs}")
-                scheduler_params.append(f"eta_min_factor={eta_min_factor}")
+    hyperparams = config['hp']
+    data_config = config.get('data', {})
+    model_config = config.get('model', {})
+    dataset_type = data_config.get('type', 'cifar10')
+    model_name = model_config.get('type', model_config.get('name', task_info['default_model']))
 
-            scheduler_info = f"{scheduler_name}"
-            if scheduler_params:
-                scheduler_info += f" ({', '.join(scheduler_params)})"
-            print(f"  └─ 调度策略: {scheduler_info}")
+    print(f"🚀 ========== 训练实验开始 ==========")
+    print(f"📋 实验配置:")
+    print(f"  └─ 实验名称: {exp_name}")
+    print(f"  └─ 任务类型: {task_info['description']} ({dataset_type.upper()})")
 
-            # 优化器信息
-            optimizer_name = config.get('optimizer', {}).get('name', 'adam')
-            weight_decay = config.get('optimizer', {}).get('params', {}).get('weight_decay', 0)
-            print(f"  └─ 优化器配置: {optimizer_name} (weight_decay={weight_decay})")
-            print(f"  └─ 多卡训练: {'是' if accelerator.num_processes > 1 else '否'}")
+    # 获取模型参数信息
+    total_params = sum(p.numel() for p in model.parameters())
+    model_size_mb = total_params * TRAINING_CONSTANTS['model_size_bytes_per_param'] / TRAINING_CONSTANTS['bytes_to_mb']
 
-            print("═" * 63)
+    print(f"  └─ 模型架构: {model_name} ({total_params/1e6:.1f}M参数, {model_size_mb:.1f}MB)")
+    print(f"  └─ 数据配置: 训练集 {len(train_dataloader.dataset):,} | 测试集 {len(test_dataloader.dataset):,} | 使用比例 {hyperparams.get('data_percentage', 1.0):.0%}")
+    print(f"  └─ 训练配置: {hyperparams['epochs']} epochs | batch_size {hyperparams['batch_size']} | 初始LR {hyperparams['learning_rate']}")
+
+    # 调度器信息
+    scheduler_config = config.get('scheduler', {})
+    scheduler_name = scheduler_config.get('name', 'default')
+    scheduler_params = []
+    if scheduler_name == 'warmup_cosine':
+        warmup_epochs = scheduler_config.get('params', {}).get('warmup_epochs', 1)
+        eta_min_factor = scheduler_config.get('params', {}).get('eta_min_factor', 0.01)
+        scheduler_params.append(f"warmup_epochs={warmup_epochs}")
+        scheduler_params.append(f"eta_min_factor={eta_min_factor}")
+
+    scheduler_info = f"{scheduler_name}"
+    if scheduler_params:
+        scheduler_info += f" ({', '.join(scheduler_params)})"
+    print(f"  └─ 调度策略: {scheduler_info}")
+
+    # 优化器信息
+    optimizer_name = config.get('optimizer', {}).get('name', 'adam')
+    weight_decay = config.get('optimizer', {}).get('params', {}).get('weight_decay', 0)
+    print(f"  └─ 优化器配置: {optimizer_name} (weight_decay={weight_decay})")
+    print(f"  └─ 多卡训练: {'是' if accelerator.num_processes > 1 else '否'}")
+
+    print("═" * 63)
+
+
+def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, loss_fn,
+                     train_dataloader, test_dataloader, accelerator: Accelerator) -> Tuple[float, float, int]:
+    """主训练循环
+
+    负责执行完整的训练循环，包括训练和测试阶段。
+
+    Args:
+        config: 完整配置字典
+        model: 已准备的模型
+        optimizer: 已准备的优化器
+        lr_scheduler: 已准备的学习率调度器
+        loss_fn: 损失函数
+        train_dataloader: 已准备的训练数据加载器
+        test_dataloader: 已准备的测试数据加载器
+        accelerator: Accelerator实例
+
+    Returns:
+        Tuple[最佳准确率, 最终准确率, 训练轮数]
+    """
+    hyperparams = config['hp']
+    scheduler_config = config.get('scheduler', {})
+    initial_lr = hyperparams['learning_rate']
 
     # 初始化最佳准确率追踪
     best_accuracy = 0.0
-
-    # 获取初始学习率用于监控
-    initial_lr = hyperparams['learning_rate']
-
-    # 记录实际训练的轮数
     trained_epochs = 0
+    val_accuracy = 0.0
 
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
@@ -447,6 +573,26 @@ def run_training(config, exp_name=None):
         # 记录完成的训练轮数
         trained_epochs = epoch
 
+    return best_accuracy, val_accuracy, trained_epochs
+
+
+def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: float,
+                      val_accuracy: float, trained_epochs: int, tracker_config: Dict[str, Any]) -> Dict[str, Any]:
+    """清理和结果返回
+
+    负责结束实验追踪、清理GPU缓存并返回训练结果。
+
+    Args:
+        accelerator: Accelerator实例
+        exp_name: 实验名称
+        best_accuracy: 最佳准确率
+        val_accuracy: 最终准确率
+        trained_epochs: 训练轮数
+        tracker_config: 追踪配置
+
+    Returns:
+        训练结果字典
+    """
     # 结束实验追踪，保存日志和结果
     accelerator.end_training()
 
@@ -458,7 +604,7 @@ def run_training(config, exp_name=None):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # 返回训练结果摘要（直接返回，不写入文件）
+    # 返回训练结果摘要
     return {
         "success": True,                       # 训练成功标志
         "exp_name": exp_name,                  # 实验名称
@@ -467,3 +613,53 @@ def run_training(config, exp_name=None):
         "trained_epochs": trained_epochs,      # 实际训练轮数
         "config": tracker_config               # 完整的训练配置
     }
+
+
+def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    训练的主入口函数，负责整个训练过程的协调，包括：
+    - 环境初始化（随机种子、实验追踪）
+    - 数据加载器创建
+    - 模型、损失函数、优化器初始化
+    - 多GPU环境配置
+    - 训练循环执行
+    - 结果记录和返回
+
+    Args:
+        config: 包含所有训练配置的字典，包括模型、数据、超参数等设置
+        exp_name: 实验名称，用于追踪和日志记录
+
+    Returns:
+        训练结果字典，包含实验名称、最佳准确率和配置信息
+    """
+    # 第1步：实验环境初始化
+    exp_name, task_info, task_tag, data_config, accelerator = setup_experiment(config, exp_name)
+
+    # 第2步：数据和模型初始化
+    train_dataloader, test_dataloader, model, dataset_info = setup_data_and_model(config, task_info, data_config, accelerator)
+
+    # 第3步：训练组件初始化
+    loss_fn, optimizer, lr_scheduler = setup_training_components(config, model, train_dataloader, accelerator)
+
+    # 清理GPU缓存，释放未使用的内存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # 使用Accelerator包装训练组件，自动处理分布式训练
+    model, optimizer, lr_scheduler, train_dataloader, test_dataloader = accelerator.prepare(
+        model, optimizer, lr_scheduler, train_dataloader, test_dataloader
+    )
+
+    # 第4步：打印实验信息
+    print_experiment_info(config, exp_name, task_info, dataset_info, model, train_dataloader, test_dataloader, accelerator)
+
+    # 第5步：执行训练循环
+    best_accuracy, val_accuracy, trained_epochs = run_training_loop(
+        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator
+    )
+
+    # 第6步：清理和返回结果
+    hyperparams = config['hp']
+    tracker_config = {**hyperparams, "exp_name": exp_name, "task_tag": task_tag}
+
+    return cleanup_and_return(accelerator, exp_name, best_accuracy, val_accuracy, trained_epochs, tracker_config)

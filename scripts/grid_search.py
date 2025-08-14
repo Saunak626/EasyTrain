@@ -225,15 +225,27 @@ def _generate_combinations_by_groups(groups_config, fixed, models_to_train):
 def get_csv_fieldnames(all_params):
     """获取CSV文件的字段名列表"""
     param_keys = sorted({k for params in all_params for k in params.keys()})
-    
+
+    # 添加常见的运行时参数，但排除冗余的基础参数
+    common_runtime_params = [
+        "data_percentage",  # 保留数据采样比例
+        "optimizer.name", "scheduler.name", "loss.name"  # 保留具体的配置参数
+    ]
+
+    # 排除冗余的基础参数（这些信息已经在hp.xxx中体现）
+    excluded_params = ["epochs", "batch_size", "learning_rate"]
+
+    # 合并所有参数键，去重并排序，排除冗余参数
+    all_param_keys = sorted(set(param_keys + common_runtime_params) - set(excluded_params))
+
     # 将model.type移到第3列，group移到第4列，其他参数按原顺序排列
-    other_param_keys = [k for k in param_keys if k not in ["model.type", "group"]]
-    
+    other_param_keys = [k for k in all_param_keys if k not in ["model.type", "group"]]
+
     fieldnames = [
         "experiment_id", "exp_name", "model.type", "group", "success",
-        "best_accuracy", "final_accuracy"
+        "best_accuracy", "final_accuracy", "trained_epochs"
     ] + other_param_keys
-    
+
     return fieldnames
 
 
@@ -249,7 +261,7 @@ def initialize_csv_file(filepath, fieldnames):
 
 def append_result_to_csv(result, filepath, fieldnames, experiment_id):
     """实时追加单个结果到CSV文件（线程安全）
-    
+
     Args:
         result (dict): 实验结果
         filepath (str): CSV文件路径
@@ -257,29 +269,52 @@ def append_result_to_csv(result, filepath, fieldnames, experiment_id):
         experiment_id (int): 实验ID
     """
     try:
+        # 准备行数据
+        row = {
+            "experiment_id": f"{experiment_id:03d}",
+            "exp_name": result.get("exp_name"),
+            "success": result.get("success"),
+            "best_accuracy": result.get("best_accuracy"),
+            "final_accuracy": result.get("final_accuracy"),
+            "trained_epochs": result.get("trained_epochs", 0),
+        }
+        row.update(result.get("params", {}))
+
+        # 只写入fieldnames中存在的字段，忽略额外字段
+        filtered_row = {k: v for k, v in row.items() if k in fieldnames}
+
+        # 检查是否有缺失的必需字段
+        missing_fields = [k for k in fieldnames if k not in row]
+        if missing_fields:
+            print(f"⚠️  缺失字段: {missing_fields}，将使用空值填充")
+            for field in missing_fields:
+                filtered_row[field] = ""
+
         # 使用文件锁确保线程安全
         with open(filepath, "a", newline="", encoding="utf-8") as csvfile:
             # 获取文件锁
             fcntl.flock(csvfile.fileno(), fcntl.LOCK_EX)
-            
+
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            row = {
-                "experiment_id": f"{experiment_id:03d}",
-                "exp_name": result.get("exp_name"),
-                "success": result.get("success"),
-                "best_accuracy": result.get("best_accuracy"),
-                "final_accuracy": result.get("final_accuracy"),
-            }
-            row.update(result.get("params", {}))
-            
-            writer.writerow(row)
-            
+            writer.writerow(filtered_row)
+            csvfile.flush()  # 强制刷新缓冲区
+
             # 释放文件锁
             fcntl.flock(csvfile.fileno(), fcntl.LOCK_UN)
-            
+
+        print(f"✅ CSV写入成功: {result.get('exp_name', 'unknown')}")
+
+        # 如果有额外字段，给出提示
+        extra_fields = [k for k in row.keys() if k not in fieldnames]
+        if extra_fields:
+            print(f"ℹ️  忽略额外字段: {extra_fields}")
+
     except Exception as e:
         print(f"⚠️  写入CSV失败: {e}")
+        print(f"   文件路径: {filepath}")
+        print(f"   当前字段名: {fieldnames}")
+        print(f"   行数据键: {list(row.keys()) if 'row' in locals() else 'N/A'}")
+        print(f"   结果数据: {result}")
 
 
 
@@ -375,6 +410,7 @@ def run_single_experiment_in_process(params, exp_id, config_path):
             "params": params,
             "best_accuracy": 0.0,
             "final_accuracy": 0.0,
+            "trained_epochs": 0,
             "error": str(e)
         }
 
@@ -459,6 +495,7 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
         "params": params,
         "best_accuracy": 0.0,
         "final_accuracy": 0.0,
+        "trained_epochs": 0,
         "error": "Failed to read result file" if success else "Training process failed"
     }
 
@@ -557,6 +594,7 @@ def run_grid_search(args):
             
         # 实时写入CSV
         if args.save_results:
+            print(f"💾 写入实验结果到CSV: {result.get('exp_name', 'unknown')}")
             append_result_to_csv(result, csv_filepath, fieldnames, i)
             
         # 实时显示最佳结果

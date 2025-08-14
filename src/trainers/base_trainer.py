@@ -419,6 +419,9 @@ def run_training(config, exp_name=None):
     # 获取初始学习率用于监控
     initial_lr = hyperparams['learning_rate']
 
+    # 记录实际训练的轮数
+    trained_epochs = 0
+
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
@@ -441,6 +444,9 @@ def run_training(config, exp_name=None):
             best_accuracy = val_accuracy
             tqdm.write(f"新最佳准确率: {best_accuracy:.2f}%")
 
+        # 记录完成的训练轮数
+        trained_epochs = epoch
+
     # 结束实验追踪，保存日志和结果
     accelerator.end_training()
 
@@ -458,5 +464,6 @@ def run_training(config, exp_name=None):
         "exp_name": exp_name,                  # 实验名称
         "best_accuracy": best_accuracy,        # 最佳测试准确率
         "final_accuracy": val_accuracy,        # 最终准确率
+        "trained_epochs": trained_epochs,      # 实际训练轮数
         "config": tracker_config               # 完整的训练配置
     }

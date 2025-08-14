@@ -51,6 +51,43 @@ SUPPORTED_TASKS = {
 }
 
 
+def get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr):
+    """获取学习率监控信息
+
+    Args:
+        optimizer: 优化器
+        lr_scheduler: 学习率调度器
+        scheduler_config: 调度器配置
+        initial_lr: 初始学习率
+
+    Returns:
+        dict: 包含学习率信息的字典
+    """
+    current_lr = optimizer.param_groups[0]['lr']
+    scheduler_name = scheduler_config.get('name', 'default')
+
+    return {
+        'initial_lr': initial_lr,
+        'current_lr': current_lr,
+        'scheduler_name': scheduler_name
+    }
+
+
+def print_learning_rate_info(lr_info, epoch, total_epochs, phase="开始"):
+    """打印学习率信息
+
+    Args:
+        lr_info: 学习率信息字典
+        epoch: 当前epoch
+        total_epochs: 总epoch数
+        phase: 阶段描述（"开始" 或 "结束"）
+    """
+    print(f"📊 Epoch {epoch}/{total_epochs} {phase} | "
+          f"调度策略: {lr_info['scheduler_name']} | "
+          f"初始LR: {lr_info['initial_lr']:.6f} | "
+          f"当前LR: {lr_info['current_lr']:.6f}")
+
+
 def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
     """执行单个训练轮次
 
@@ -360,15 +397,27 @@ def run_training(config, exp_name=None):
     # 初始化最佳准确率追踪
     best_accuracy = 0.0
 
+    # 获取初始学习率用于监控
+    initial_lr = hyperparams['learning_rate']
+
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
-            tqdm.write(f"Epoch {epoch}/{hyperparams['epochs']}")
+            # tqdm.write(f"Epoch {epoch}/{hyperparams['epochs']}")
+
+            # 打印epoch开始时的学习率信息
+            lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
+            print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
 
         # 训练epoch
         train_loss = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
         # 测试epoch
         val_loss, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
+
+        # 打印epoch结束时的学习率信息
+        if accelerator.is_main_process:
+            lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
+            print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "结束")
 
         # 更新并记录最佳准确率
         if accelerator.is_main_process and val_accuracy > best_accuracy:

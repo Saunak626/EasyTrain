@@ -12,7 +12,7 @@ import csv
 import json
 import random
 import fcntl
-import pandas as pd
+
 from datetime import datetime
 
 # 添加项目根目录到路径
@@ -99,12 +99,10 @@ def _generate_combinations_by_groups(groups_config, fixed, models_to_train):
                 print(f"   🔄 扩充batch_size: {group_batch_sizes} (扩充到与model.type长度一致)")
                 # 创建一对一配对字典
                 model_batch_dict = dict(zip(group_models, group_batch_sizes))
-                print(f"   📊 模型-batch_size配对字典: {model_batch_dict}")
             elif len(group_batch_sizes) == len(group_models):
                 # 情况2：batch_size长度=model.type长度，按顺序配对
                 print(f"   ✅ 长度匹配，将按顺序配对")
                 model_batch_dict = dict(zip(group_models, group_batch_sizes))
-                print(f"   📊 模型-batch_size配对字典: {model_batch_dict}")
             else:
                 # 情况3：batch_size长度≠1且≠model.type长度，作为独立参数处理
                 print(f"   🔄 batch_size作为独立参数处理，将与模型进行笛卡尔积组合")
@@ -120,10 +118,8 @@ def _generate_combinations_by_groups(groups_config, fixed, models_to_train):
             if not enabled_models:
                 print(f"   ⏭️  跳过组 {group_name}：无启用的模型")
                 continue
-            print(f"   🎯 启用的模型: {enabled_models}")
         else:
             enabled_models = group_models
-            print(f"   🎯 使用所有模型: {enabled_models}")
         
         # === 第5步：处理参数组合 ===
         if model_batch_dict is not None:
@@ -286,26 +282,7 @@ def append_result_to_csv(result, filepath, fieldnames, experiment_id):
         print(f"⚠️  写入CSV失败: {e}")
 
 
-def load_completed_experiments(filepath):
-    """加载已完成的实验，支持断点续传
-    
-    Args:
-        filepath (str): CSV文件路径
-        
-    Returns:
-        set: 已完成的实验名称集合
-    """
-    if not os.path.exists(filepath):
-        return set()
-    
-    try:
-        df = pd.read_csv(filepath)
-        completed_experiments = set(df['exp_name'].tolist())
-        print(f"🔄 发现已完成的实验: {len(completed_experiments)} 个")
-        return completed_experiments
-    except Exception as e:
-        print(f"⚠️  读取已完成实验失败: {e}")
-        return set()
+
 
 
 def save_results_to_csv(results, filename):
@@ -537,33 +514,10 @@ def run_grid_search(args):
     all_params = [params for params in combinations]
     fieldnames = get_csv_fieldnames(all_params)
     
-    # 断点续传：检查已完成的实验
-    completed_experiments = set()
+    # 初始化CSV文件
     if args.save_results:
         os.makedirs(results_dir, exist_ok=True)
-        
-        # 如果用户指定了结果文件，优先检查该文件
-        if args.results_file and os.path.exists(csv_filepath):
-            completed_experiments = load_completed_experiments(csv_filepath)
-            if completed_experiments:
-                print(f"🔄 断点续传: 使用指定的结果文件 {results_filename}")
-        else:
-            # 否则检查是否有其他结果文件存在（用于断点续传）
-            existing_files = [f for f in os.listdir(results_dir) if f.startswith("grid_search_results_") and f.endswith(".csv")]
-            if existing_files and not args.results_file:
-                latest_file = max(existing_files, key=lambda x: os.path.getctime(os.path.join(results_dir, x)))
-                latest_filepath = os.path.join(results_dir, latest_file)
-                completed_experiments = load_completed_experiments(latest_filepath)
-                
-                if completed_experiments:
-                    # 使用已存在的文件继续写入
-                    csv_filepath = latest_filepath
-                    results_filename = latest_file
-                    print(f"🔄 断点续传: 使用已存在的结果文件 {latest_file}")
-        
-        # 如果没有找到已完成的实验，初始化新的CSV文件
-        if not completed_experiments:
-            initialize_csv_file(csv_filepath, fieldnames)
+        initialize_csv_file(csv_filepath, fieldnames)
     else:
         # 不保存结果时也需要初始化
         initialize_csv_file(csv_filepath, fieldnames)
@@ -580,17 +534,10 @@ def run_grid_search(args):
 
     results = []
     successful = 0
-    skipped = 0
 
     for i, params in enumerate(combinations, 1):
         exp_name = f"grid_{i:03d}"
-        
-        # 断点续传：跳过已完成的实验
-        if exp_name in completed_experiments:
-            print(f"⏭️  跳过已完成的实验 {i}/{len(combinations)}: {exp_name}")
-            skipped += 1
-            continue
-            
+
         print(f"📊 准备实验 {i}/{len(combinations)}")
         
         # 将命令行参数添加到实验参数中
@@ -621,8 +568,6 @@ def run_grid_search(args):
     print("=" * 60)
     print(f"📈 网格搜索完成！")
     print(f"✅ 成功实验数量: {successful}/{len(combinations)}")
-    if skipped > 0:
-        print(f"⏭️  跳过已完成实验: {skipped} 个")
 
     if successful > 0:
         successful_results = [r for r in results if r["success"]]

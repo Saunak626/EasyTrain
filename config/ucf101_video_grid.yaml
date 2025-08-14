@@ -64,7 +64,7 @@ max_experiments: 100
 continue_on_error: true
 parallel_jobs: 1
 save_results: true
-results_file: "video_grid_search_results.csv"
+# results_file: "video_grid_search_results.csv"  # 注释掉以使用时间戳文件名
 
 # 网格搜索超参数 - 分组式配置
 grid_search:

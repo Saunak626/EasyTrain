@@ -48,16 +48,15 @@ multi_gpu:
 # 模型选择配置
 models_to_train:
   # 启用要训练的模型列表，注释掉不需要训练的模型
-  # - "r3d_18"
-  # - "mc3_18"
-  # - "r2plus1d_18"
+  - "r3d_18"
+  - "mc3_18"
+  - "r2plus1d_18"
   # - "s3d"
-  - "mvit_v1_b"
-  - "mvit_v2_s"
-  - "swin3d_b"
-  - "swin3d_s"
-  - "swin3d_t"
-  # 可选的其他模型（当前已注释）
+  # - "mvit_v1_b"
+  # - "mvit_v2_s"
+  # - "swin3d_b"
+  # - "swin3d_s"
+  # - "swin3d_t"
 
 # 网格搜索设置
 max_experiments: 100
@@ -74,20 +73,26 @@ grid_search:
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
       hp.batch_size: [128]  # 统一batch_size，会自动扩充为 [128, 128, 128]
-      hp.learning_rate: [0.001]
-      optimizer.name: ["adam"]
-      optimizer.params.weight_decay: [0.0001]
-      scheduler.name: ["cosine"]
+      hp.learning_rate: [0.001, 0.005]
+      optimizer.name: ["adamw"]
+      optimizer.params.weight_decay: [0.01, 0.05]
+      scheduler.name: ["warmup_cosine", "cosine"]
+      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
+      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
       loss.name: ["crossentropy"]
     
     # 复杂3D CNN模型组 - 单模型，多batch_size选择
     complex_3d_cnn:
       model.type: ["s3d"]
       hp.batch_size: [128]  # S3D需要小batch_size
-      hp.learning_rate: [0.01]  # 测试不同学习率
-      optimizer.name: ["adam"]  # S3D用Adam即可
-      optimizer.params.weight_decay: [0.0001]  # 适中的权重衰减
-      scheduler.name: ["cosine"]  # cosine和step调度
+      hp.learning_rate: [0.005]  # 测试不同学习率
+      optimizer.name: ["adamw"]  # S3D用Adam即可
+      optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
+      scheduler.name: ["warmup_cosine", "cosine"]  # 首选Warmup + Cosine，次选纯Cosine
+      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
+      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
       loss.name: ["crossentropy"]
     
     # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
@@ -96,9 +101,9 @@ grid_search:
       hp.batch_size: [36, 32]  # 按顺序配对：mvit_v1_b用36，mvit_v2_s用32
       hp.learning_rate: [0.001]  # 降低学习率，更稳定
       optimizer.name: ["adamw"]  # Transformer首选AdamW
-      optimizer.params.weight_decay: [0.01]  # 适中的权重衰减
-      scheduler.name: ["warmup_cosine", "cosine"]  # 首选Warmup + Cosine，次选纯Cosine
-      scheduler.params.warmup_epochs: [1, 2]  # Warmup期长度：1-2个epoch
+      optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
+      scheduler.name: ["warmup_cosine"]  # 首选Warmup + Cosine，次选纯Cosine
+      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
       scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
       scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
       loss.name: ["crossentropy"]
@@ -107,13 +112,13 @@ grid_search:
     swin3d_models:
       model.type: ["swin3d_b", "swin3d_s", "swin3d_t"]
       hp.batch_size: [16, 16, 16]  # 按顺序配对：swin3d_b用4，swin3d_s用8，swin3d_t用16
-      hp.learning_rate: [0.001, 0.0001]  # 保守的学习率
+      hp.learning_rate: [0.001]  # 保守的学习率
       optimizer.name: ["adamw"]  # Swin系列推荐AdamW
-      optimizer.params.weight_decay: [0.01, 0.05]  # Swin系列用更大的weight_decay
-      scheduler.name: ["warmup_cosine", "cosine"]  # 首选Warmup + Cosine，次选纯Cosine
-      scheduler.params.warmup_epochs: [1, 2]  # Warmup期长度：1-2个epoch
-      scheduler.params.warmup_start_factor: [0.1, 0.2]  # Warmup起始学习率比例：10%-20%
-      scheduler.params.eta_min_factor: [0.01, 0.005]  # 最小学习率比例：1%-0.5%
+      optimizer.params.weight_decay: [0.05]  # Swin系列用更大的weight_decay
+      scheduler.name: ["warmup_cosine"]  # 首选Warmup + Cosine，次选纯Cosine
+      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
+      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例：10%-20%
+      scheduler.params.eta_min_factor: [0.005]  # 最小学习率比例：1%-0.5%
       loss.name: ["crossentropy"]
 
   # # 兼容旧格式的grid配置（如果groups不存在时使用）

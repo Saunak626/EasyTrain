@@ -782,10 +782,15 @@ def run_grid_search(args):
     print(f"📊 使用配置文件: {args.config}")
     print(f"💾 结果文件: {csv_filepath}")
     
+    # 处理data_percentage参数：如果未指定则使用默认值1.0
+    data_percentage = args.data_percentage if args.data_percentage is not None else 1.0
+
     # 显示全局参数覆盖
     if args.data_percentage is not None:
         print(f"🎯 全局参数覆盖: data_percentage={args.data_percentage}")
-    
+    else:
+        print(f"🎯 使用默认data_percentage: {data_percentage}")
+
     print("=" * 60)
 
     results = []
@@ -795,11 +800,11 @@ def run_grid_search(args):
         exp_name = f"grid_{i:03d}"
 
         print(f"📊 准备实验 {i}/{len(combinations)}")
-        
+
         # 将命令行参数添加到实验参数中
         experiment_params = params.copy()
-        if args.data_percentage is not None:
-            experiment_params['data_percentage'] = args.data_percentage
+        # 始终添加data_percentage参数，确保CSV记录完整
+        experiment_params['data_percentage'] = data_percentage
 
         result = run_single_experiment(
             experiment_params, f"{i:03d}",

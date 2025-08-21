@@ -23,6 +23,8 @@
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
+from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
 from .dataloader_factory import create_dataloaders, get_dataset_info
 
-__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'VideoDataset', 'CombinedVideoDataset', 'create_dataloaders', 'get_dataset_info']
+__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'VideoDataset', 'CombinedVideoDataset',
+           'NeonatalMultilabelDataset', 'create_dataloaders', 'get_dataset_info']

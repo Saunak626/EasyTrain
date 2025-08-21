@@ -8,6 +8,55 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class MultilabelBCELoss(nn.Module):
+    """
+    多标签二元交叉熵损失函数
+
+    用于多标签分类任务，每个标签独立进行二元分类。
+    支持类别权重和位置权重来处理类别不平衡问题。
+
+    Args:
+        pos_weight (torch.Tensor, optional): 正样本权重，用于处理正负样本不平衡
+        weight (torch.Tensor, optional): 类别权重，用于处理类别不平衡
+        reduction (str, optional): 损失聚合方式，'mean'、'sum'或'none'，默认为'mean'
+    """
+
+    def __init__(self, pos_weight=None, weight=None, reduction='mean'):
+        super(MultilabelBCELoss, self).__init__()
+        self.pos_weight = pos_weight
+        self.weight = weight
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        计算多标签BCE损失
+
+        Args:
+            inputs (torch.Tensor): 模型输出的logits，形状为(batch_size, num_classes)
+            targets (torch.Tensor): 真实标签，形状为(batch_size, num_classes)，值为0或1
+
+        Returns:
+            torch.Tensor: 计算得到的多标签BCE损失
+        """
+        # 确保pos_weight和weight在正确的设备上
+        pos_weight = self.pos_weight
+        weight = self.weight
+
+        if pos_weight is not None:
+            pos_weight = pos_weight.to(inputs.device)
+        if weight is not None:
+            weight = weight.to(inputs.device)
+
+        # 使用sigmoid激活函数将logits转换为概率
+        loss = F.binary_cross_entropy_with_logits(
+            inputs, targets,
+            pos_weight=pos_weight,
+            weight=weight,
+            reduction=self.reduction
+        )
+        return loss
+
+
 class FocalLoss(nn.Module):
     """
     Focal Loss损失函数，用于解决类别不平衡问题
@@ -143,5 +192,20 @@ def get_loss_function(loss_config=None, loss_name=None, **kwargs):
             reduction=params.get('reduction', 'mean'),
             beta=params.get('beta', 1.0)
         )
+    elif loss_name == "multilabel_bce":
+        # 处理正样本权重
+        pos_weight = params.get('pos_weight', None)
+        if pos_weight is not None and not isinstance(pos_weight, torch.Tensor):
+            # 如果是标量，创建对应维度的tensor
+            if isinstance(pos_weight, (int, float)):
+                pos_weight = torch.full((24,), pos_weight)  # 新生儿数据有24个标签
+            else:
+                pos_weight = torch.tensor(pos_weight)
+
+        return MultilabelBCELoss(
+            pos_weight=pos_weight,
+            weight=params.get('weight', None),
+            reduction=params.get('reduction', 'mean')
+        )
     else:
-        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse, l1, smoothl1")
+        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse, l1, smoothl1, multilabel_bce")

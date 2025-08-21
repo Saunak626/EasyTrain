@@ -265,8 +265,11 @@ def create_base_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--scheduler.params.warmup_epochs", type=int, help="Warmup期长度")
     parser.add_argument("--scheduler.params.warmup_start_factor", type=float, help="Warmup起始学习率比例")
     parser.add_argument("--scheduler.params.eta_min_factor", type=float, help="最小学习率比例")
+    parser.add_argument("--scheduler.params.step_size", type=int, help="Step调度器的步长")
+    parser.add_argument("--scheduler.params.gamma", type=float, help="Step调度器的衰减因子")
     parser.add_argument("--loss", type=str, help="损失函数类型")
     parser.add_argument("--loss.name", type=str, help="损失函数名称")
+    parser.add_argument("--loss.params.pos_weight", type=float, help="多标签BCE损失的正样本权重")
     
     # === 超参数命名空间 ===
     # 使用hp前缀的参数，与配置文件中的hp节点对应

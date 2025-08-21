@@ -264,10 +264,22 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
             is_multilabel = len(targets.shape) > 1 and targets.shape[1] > 1 and targets.dtype == torch.float32
 
             if is_multilabel:
-                # 多标签分类：使用sigmoid + 阈值
+                # 多标签分类：使用每类别平均准确率
                 predictions = torch.sigmoid(outputs) > 0.5
-                # 计算完全匹配的样本数（所有标签都正确）
-                correct = (predictions == targets.bool()).all(dim=1).sum()
+                targets_bool = targets.bool()
+
+                # 计算每个类别的准确率，然后平均（宏平均）
+                class_accuracies = []
+                for class_idx in range(targets.shape[1]):
+                    class_pred = predictions[:, class_idx]
+                    class_target = targets_bool[:, class_idx]
+                    class_acc = (class_pred == class_target).float().mean()
+                    class_accuracies.append(class_acc)
+
+                # 宏平均准确率：每个类别准确率的平均值
+                macro_accuracy = torch.stack(class_accuracies).mean()
+                # 转换为正确样本数（用于兼容现有统计逻辑），确保类型为Long
+                correct = (macro_accuracy * batch_size).long()
             else:
                 # 单标签分类：使用argmax
                 correct = outputs.argmax(dim=1).eq(targets).sum()

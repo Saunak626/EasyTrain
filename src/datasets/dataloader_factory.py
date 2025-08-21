@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Subset
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
+from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
 
 
 def is_main_process():
@@ -82,8 +83,34 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
 
         num_classes = 101  # UCF-101固定为101个类别
 
+    elif dataset_name == "neonatal_multilabel":
+        # 新生儿多标签行为识别数据集
+        clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))
+
+        # 数据路径
+        frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
+        labels_file = "/home/swq/Code/Neonate-Feeding-Assessment/result_xlsx/latest/multi_hot_labels.xlsx"
+
+        train_dataset = NeonatalMultilabelDataset(
+            frames_dir=frames_dir,
+            labels_file=labels_file,
+            split='train',
+            clip_len=clip_len,
+            model_type=model_type
+        )
+
+        test_dataset = NeonatalMultilabelDataset(
+            frames_dir=frames_dir,
+            labels_file=labels_file,
+            split='test',
+            clip_len=clip_len,
+            model_type=model_type
+        )
+
+        num_classes = train_dataset.get_num_classes()
+
     else:
-        raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom, ucf101, ucf101_video")
+        raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom, ucf101, ucf101_video, neonatal_multilabel")
 
     # 按比例随机抽样数据子集（支持快速实验）
     if 0 < data_percentage < 1.0:
@@ -165,6 +192,19 @@ def get_dataset_info(dataset_name):
             "num_classes": 101,
             "input_size": (3, 16, 112, 112),  # (C, T, H, W)
             "classes": None  # 需要运行时确定
+        }
+    elif dataset_name == "neonatal_multilabel":
+        return {
+            "name": "Neonatal Multilabel Behavior Recognition",
+            "num_classes": 24,
+            "input_size": (3, 16, 112, 112),  # (C, T, H, W)
+            "classes": [
+                '喂养开始', '喂养结束', '易哭闹', '张嘴闭嘴', '吸吮行为', '吃手指',
+                '吃脚指', '皱眉', '哭泣', '发脾气', '来回摇头', '手脚活动加快',
+                '寻找奶瓶', '注视奶瓶', '声调变高', '打哈欠', '睡着了', '间歇喝奶',
+                '唇部触食反应', '喂养期鬼脸', '口腔器具咬合', '头颈侧向回避',
+                '肢体张力减退', '远离奶瓶'
+            ]
         }
     else:
         raise ValueError(f"不支持的数据集: {dataset_name}")

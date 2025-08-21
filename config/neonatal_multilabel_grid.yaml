@@ -1,0 +1,116 @@
+# 新生儿多标签行为识别网格搜索配置
+# 基于UCF101视频配置，适配新生儿多标签数据
+
+# 任务配置
+task:
+  tag: "video_classification"  # 使用视频分类任务类型
+  description: "新生儿多标签行为识别网格搜索"
+
+# 训练配置
+training:
+  exp_name: "neonatal_multilabel_exp"
+  save_model: true
+  model_save_path: "models/neonatal_multilabel_model.pth"
+
+# SwanLab配置
+swanlab:
+  project_name: "EasyTrain-Neonatal-Multilabel"
+  description: "新生儿多标签行为识别网格搜索实验"
+
+# 数据配置
+data:
+  type: neonatal_multilabel  # 使用新的新生儿多标签数据集类型
+  root: /home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments  # 数据集根目录
+  num_workers: 8       # 减少工作进程数，避免CPU和内存过载
+  params:
+    clip_len: 16      # 每个视频片段的帧数
+
+# 模型配置（仅保留必要的基础参数）
+model:
+  params:
+    num_classes: 24  # 新生儿行为有24个标签类别
+
+# 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
+hp:
+  epochs: 5
+
+# GPU配置
+gpu:
+  device_ids: "2,3"
+  auto_select: true
+
+# 多卡训练配置
+multi_gpu:
+  enabled: true
+  strategy: "ddp"
+
+# 模型选择配置
+models_to_train:
+  # 启用要训练的模型列表，注释掉不需要训练的模型
+  - "r3d_18"
+  - "mc3_18"
+  - "r2plus1d_18"
+  # - "s3d"
+  # - "mvit_v1_b"
+  # - "mvit_v2_s"
+  # - "swin3d_b"
+  # - "swin3d_s"
+  # - "swin3d_t"
+
+# 网格搜索设置
+max_experiments: 50
+continue_on_error: true
+parallel_jobs: 1
+save_results: true
+# results_file: "neonatal_multilabel_grid_search_results.csv"  # 注释掉以使用时间戳文件名
+
+# 网格搜索超参数 - 分组式配置
+grid_search:
+  # 分组式搜索：每组模型有自己的超参数搜索范围
+  groups:
+    # 轻量级3D CNN模型组 - 使用更大的batch_size
+    light_3d_cnn:
+      model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
+      hp.batch_size: [4]  # 使用更大的batch_size，128优先
+      hp.learning_rate: [0.001]
+      optimizer.name: ["adamw"]
+      optimizer.params.weight_decay: [0.001]
+      scheduler.name: ["warmup_cosine"]
+      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1个epoch
+      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
+      loss.name: ["multilabel_bce"]  # 多标签二元交叉熵损失
+
+# 评估指标配置（暂时注释掉，使用默认指标）
+# metrics:
+#   - name: multilabel_accuracy
+#   - name: multilabel_f1
+#   - name: multilabel_precision
+#   - name: multilabel_recall
+
+# 日志和保存配置
+# logging:
+#   log_level: INFO
+#   save_model: true
+#   save_best_only: true
+#   monitor_metric: "val_accuracy"  # 使用默认的准确率指标
+#   monitor_mode: "max"
+
+# # 数据采样配置（用于快速测试）
+# sampling:
+#   train_percentage: 1.0    # 训练数据使用比例
+#   val_percentage: 1.0      # 验证数据使用比例
+
+# # 环境配置
+# environment:
+#   cuda_visible_devices: "2,3"  # 指定使用的GPU
+#   mixed_precision: false       # 是否使用混合精度训练
+#   deterministic: true          # 确定性训练
+#   seed: 42                     # 随机种子
+
+# 输出配置
+output:
+  results_dir: "runs"
+  experiment_name: "neonatal_multilabel_behavior"
+  save_predictions: true
+  save_confusion_matrix: true

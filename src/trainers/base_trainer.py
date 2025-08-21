@@ -50,7 +50,7 @@ SUPPORTED_TASKS = {
     },
     'video_classification': {
         'description': '视频分类任务',
-        'supported_datasets': ['ucf101', 'ucf101_video'],
+        'supported_datasets': ['ucf101', 'ucf101_video', 'neonatal_multilabel'],
         'model_factory': 'get_video_model',
         'default_model': 'r3d_18'
     }
@@ -259,8 +259,18 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
 
             # 计算当前批次的统计信息
             batch_size = targets.size(0)
-            # 获取预测类别并计算正确预测数量
-            correct = outputs.argmax(dim=1).eq(targets).sum()
+
+            # 检查是否为多标签分类（标签维度大于1且包含浮点数）
+            is_multilabel = len(targets.shape) > 1 and targets.shape[1] > 1 and targets.dtype == torch.float32
+
+            if is_multilabel:
+                # 多标签分类：使用sigmoid + 阈值
+                predictions = torch.sigmoid(outputs) > 0.5
+                # 计算完全匹配的样本数（所有标签都正确）
+                correct = (predictions == targets.bool()).all(dim=1).sum()
+            else:
+                # 单标签分类：使用argmax
+                correct = outputs.argmax(dim=1).eq(targets).sum()
 
             # 累加到本地统计量（考虑批次大小权重）
             local_loss_sum += loss * batch_size

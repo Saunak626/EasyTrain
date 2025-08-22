@@ -32,7 +32,7 @@ model:
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
-  epochs: 10
+  epochs: 5
 
 # GPU配置
 gpu:
@@ -78,7 +78,7 @@ grid_search:
     # - "exponential": 指数衰减，参数：gamma
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
-      hp.batch_size: [128]  # 使用更大的batch_size，128优先
+      hp.batch_size: [64]  # 使用更大的batch_size，128优先
       hp.learning_rate: [0.001]  # 提高学习率，加快收敛
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.05]

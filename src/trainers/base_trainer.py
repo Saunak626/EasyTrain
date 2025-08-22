@@ -10,6 +10,7 @@ import sys
 import json
 import torch
 import torch.nn as nn
+import numpy as np
 from typing import Dict, Any, Tuple, Optional
 
 from tqdm import tqdm
@@ -219,12 +220,14 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     return avg_train_loss
 
 
-def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=None):
+def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=None,
+               metrics_calculator=None):
     """
     执行单个测试轮次
 
     该函数在测试集上评估模型性能，计算平均损失和准确率。
     支持多GPU环境下的指标聚合，确保结果的准确性。
+    支持详细的多标签分类指标计算和报告。
 
     Args:
         dataloader (torch.utils.data.DataLoader): 测试数据加载器，提供测试批次数据
@@ -232,6 +235,8 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
         loss_fn (torch.nn.Module): 损失函数，用于计算测试损失
         accelerator (accelerate.Accelerator): Accelerator实例，处理多GPU指标聚合
         epoch (int): 当前测试轮次编号
+        train_batches (int, optional): 训练批次数，用于日志显示
+        metrics_calculator (MultilabelMetricsCalculator, optional): 多标签指标计算器
 
     Returns:
         tuple: (平均损失, 准确率百分比) 或 (None, None) 如果不是主进程
@@ -244,6 +249,11 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     local_loss_sum = torch.tensor(0.0, device=device)  # 当前GPU的总损失
     local_correct = torch.tensor(0, device=device)     # 当前GPU的正确预测数
     local_samples = torch.tensor(0, device=device)     # 当前GPU的样本总数
+
+    # 用于详细多标签评估的数据收集
+    all_predictions = []
+    all_targets = []
+    is_multilabel = False
 
     # 使用统一的进度条管理器
     progress_manager = ProgressBarManager(accelerator)
@@ -267,6 +277,13 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
                 # 多标签分类：使用每类别平均准确率
                 predictions = torch.sigmoid(outputs) > 0.5
                 targets_bool = targets.bool()
+
+                # 收集预测和目标数据用于详细评估
+                if metrics_calculator is not None:
+                    # 收集sigmoid概率和真实标签
+                    sigmoid_probs = torch.sigmoid(outputs)
+                    all_predictions.append(sigmoid_probs.cpu().numpy())
+                    all_targets.append(targets.cpu().numpy())
 
                 # 计算每个类别的准确率，然后平均（宏平均）
                 class_accuracies = []
@@ -308,16 +325,49 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
         avg_loss = (total_loss / total_samples).item()
         accuracy = 100. * total_correct.item() / total_samples.item()
 
-        # 使用tqdm.write()输出摘要，不破坏进度条显示
-        log_msg = f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%'
-        if train_batches is not None:
-            log_msg += f' | train_batches={train_batches}'
-        tqdm.write(log_msg)
+        # 如果有多标签指标计算器且收集了数据，进行详细评估
+        if metrics_calculator is not None and all_predictions and is_multilabel:
+            # 合并所有批次的预测和目标
+            all_pred_array = np.concatenate(all_predictions, axis=0)
+            all_target_array = np.concatenate(all_targets, axis=0)
 
-        # 记录测试指标到实验追踪系统
-        accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
+            # 计算详细指标
+            detailed_metrics = metrics_calculator.calculate_detailed_metrics(
+                all_pred_array, all_target_array, threshold=0.5
+            )
 
-        # GPU监控功能已移除
+            # 更新最佳指标
+            is_best = metrics_calculator.update_best_metrics(detailed_metrics, epoch)
+
+            # 保存指标
+            metrics_calculator.save_metrics(detailed_metrics, epoch, avg_loss, is_best)
+
+            # 显示详细指标
+            detailed_display = metrics_calculator.format_metrics_display(
+                detailed_metrics, epoch, avg_loss, train_batches or 0
+            )
+            tqdm.write(detailed_display)
+
+            if is_best:
+                tqdm.write(f"🏆 新最佳宏平均F1分数: {detailed_metrics['macro_avg']['f1']:.4f}")
+
+            # 记录详细指标到实验追踪系统
+            accelerator.log({
+                "test/loss": avg_loss,
+                "test/accuracy": accuracy,
+                "test/macro_f1": detailed_metrics['macro_avg']['f1'],
+                "test/macro_precision": detailed_metrics['macro_avg']['precision'],
+                "test/macro_recall": detailed_metrics['macro_avg']['recall']
+            }, step=epoch)
+        else:
+            # 标准输出（单标签或无详细评估）
+            log_msg = f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%'
+            if train_batches is not None:
+                log_msg += f' | train_batches={train_batches}'
+            tqdm.write(log_msg)
+
+            # 记录测试指标到实验追踪系统
+            accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
 
         return avg_loss, accuracy
 
@@ -570,6 +620,33 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
     trained_epochs = 0
     val_accuracy = 0.0
 
+    # 初始化多标签指标计算器（如果是多标签任务）
+    metrics_calculator = None
+    task_tag = config.get('task_tag', '')
+    dataset_type = config.get('data', {}).get('type', '')
+
+    # 检测多标签任务：通过task_tag或dataset_type
+    is_multilabel_task = ('multilabel' in task_tag.lower() or
+                         'multilabel' in dataset_type.lower())
+
+    if is_multilabel_task:
+        from src.evaluation import MultilabelMetricsCalculator
+        from src.datasets import get_dataset_info
+
+        # 获取数据集信息以获取类别名称
+        dataset_name = config.get('dataset_name', 'neonatal_multilabel')
+        dataset_info = get_dataset_info(dataset_name)
+        class_names = dataset_info.get('classes', [])
+
+        if class_names:
+            metrics_calculator = MultilabelMetricsCalculator(
+                class_names=class_names,
+                output_dir="runs/neonatal"
+            )
+            if accelerator.is_main_process:
+                tqdm.write(f"📊 启用详细多标签评估，类别数: {len(class_names)}")
+                tqdm.write(f"📁 指标保存目录: runs/neonatal")
+
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
         if accelerator.is_main_process:
@@ -580,7 +657,9 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
         # 训练epoch
         train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
         # 测试epoch
-        _, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch, train_batches=len(train_dataloader))
+        _, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch,
+                                   train_batches=len(train_dataloader),
+                                   metrics_calculator=metrics_calculator)
 
         # 打印epoch结束时的学习率信息
         if accelerator.is_main_process:
@@ -594,6 +673,11 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
 
         # 记录完成的训练轮数
         trained_epochs = epoch
+
+    # 训练结束后显示总结报告
+    if accelerator.is_main_process and metrics_calculator is not None:
+        summary_report = metrics_calculator.get_summary_report()
+        tqdm.write(summary_report)
 
     return best_accuracy, val_accuracy, trained_epochs
 

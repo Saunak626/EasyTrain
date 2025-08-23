@@ -24,11 +24,14 @@ data:
   num_workers: 12       # 减少工作进程数，避免CPU和内存过载
   params:
     clip_len: 16      # 每个视频片段的帧数
+    top_n_classes: 7  # 只使用样本数量前7多的类别，减少稀有类别干扰
+    stratified_split: true  # 启用分层抽样，确保训练测试集类别分布一致
+    min_samples_per_class: 10  # 类别最小样本数阈值
 
 # 模型配置（仅保留必要的基础参数）
 model:
   params:
-    num_classes: 24  # 新生儿行为有24个标签类别
+    num_classes: 7  # 使用筛选后的类别数量（与top_n_classes保持一致）
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
@@ -49,7 +52,7 @@ models_to_train:
   # 启用要训练的模型列表，注释掉不需要训练的模型
   - "r3d_18"
   - "mc3_18"
-  - "r2plus1d_18"
+  # - "r2plus1d_18"
   - "mvit_v1_b"
   - "mvit_v2_s"
   - "swin3d_b"
@@ -82,7 +85,7 @@ grid_search:
       hp.learning_rate: [0.001]  # 提高学习率，加快收敛
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.05]
-      scheduler.name: ["warmup_cosine", "step"]  # 使用更简单的调度器
+      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
       scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
       scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
       scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
@@ -98,7 +101,7 @@ grid_search:
       hp.learning_rate: [0.001]  # 降低学习率，更稳定
       optimizer.name: ["adamw"]  # Transformer首选AdamW
       optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
-      scheduler.name: ["warmup_cosine", "step"]  # 使用更简单的调度器
+      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
       scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
       scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
       scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%

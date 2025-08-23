@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 import logging
+from sklearn.model_selection import train_test_split
+from collections import Counter
 from .label_cache import LabelCache, OptimizedLabelProcessor
 
 logger = logging.getLogger(__name__)
@@ -36,52 +38,67 @@ class NeonatalMultilabelDataset(Dataset):
         model_type (str): 模型类型，用于获取对应的transforms
     """
     
-    def __init__(self, frames_dir, labels_file, split='train', clip_len=16, model_type=None):
+    def __init__(self, frames_dir, labels_file, split='train', clip_len=16, model_type=None,
+                 top_n_classes=None, stratified_split=True, min_samples_per_class=10):
         """初始化新生儿多标签数据集
-        
+
         Args:
             frames_dir (str): 帧图像根目录路径
             labels_file (str): Excel标签文件路径
             split (str): 数据集分割，'train'或'test'
             clip_len (int): 每个视频片段的帧数，默认16
             model_type (str): 模型类型，用于获取对应的transforms
+            top_n_classes (int, optional): 只使用样本数量前N多的类别，None表示使用全部类别
+            stratified_split (bool): 是否使用分层抽样进行数据划分，默认True
+            min_samples_per_class (int): 类别最小样本数阈值，默认10
         """
         self.frames_dir = frames_dir
         self.labels_file = labels_file
         self.split = split
         self.clip_len = clip_len
         self.model_type = model_type
-        
+        self.top_n_classes = top_n_classes
+        self.stratified_split = stratified_split
+        self.min_samples_per_class = min_samples_per_class
+
         # 获取模型特定的transforms
         self.model_transforms = self._get_model_transforms()
-        
+
         # 优化的预处理参数
         self.resize_height = 224
         self.resize_width = 224
         self.crop_size = 112
-        
-        # 定义24个行为标签
-        self.behavior_labels = [
-            '喂养开始', '喂养结束', '易哭闹', '张嘴闭嘴', '吸吮行为', '吃手指', 
-            '吃脚指', '皱眉', '哭泣', '发脾气', '来回摇头', '手脚活动加快', 
-            '寻找奶瓶', '注视奶瓶', '声调变高', '打哈欠', '睡着了', '间歇喝奶', 
-            '唇部触食反应', '喂养期鬼脸', '口腔器具咬合', '头颈侧向回避', 
+
+        # 定义24个原始行为标签
+        self.original_behavior_labels = [
+            '喂养开始', '喂养结束', '易哭闹', '张嘴闭嘴', '吸吮行为', '吃手指',
+            '吃脚指', '皱眉', '哭泣', '发脾气', '来回摇头', '手脚活动加快',
+            '寻找奶瓶', '注视奶瓶', '声调变高', '打哈欠', '睡着了', '间歇喝奶',
+            '唇部触食反应', '喂养期鬼脸', '口腔器具咬合', '头颈侧向回避',
             '肢体张力减退', '远离奶瓶'
         ]
-        
-        self.num_classes = len(self.behavior_labels)
-        self.class_names = self.behavior_labels
-        
-        # 使用优化的标签处理器
-        self.label_processor = OptimizedLabelProcessor(self.labels_file, self.behavior_labels)
+
+        # 使用优化的标签处理器（使用原始标签）
+        self.label_processor = OptimizedLabelProcessor(self.labels_file, self.original_behavior_labels)
 
         # 加载和处理数据（使用缓存）
-        self.samples = self._load_samples_optimized()
+        all_samples = self._load_samples_optimized()
 
-        # 数据分割
-        self.samples = self._split_data(self.samples, split)
-        
-        logger.info(f"加载 {split} 数据集: {len(self.samples)} 个样本")
+        # 分析类别分布并筛选类别
+        self.selected_classes, self.class_mapping = self._select_top_classes(all_samples)
+        self.behavior_labels = self.selected_classes
+        self.num_classes = len(self.behavior_labels)
+        self.class_names = self.behavior_labels
+
+        # 更新样本标签（只保留选定的类别）
+        all_samples = self._update_sample_labels(all_samples)
+
+        # 数据分割（使用分层抽样或简单分割）
+        self.samples = self._split_data(all_samples, split)
+
+        logger.info(f"加载 {split} 数据集: {len(self.samples)} 个样本，使用 {self.num_classes} 个类别")
+        if self.top_n_classes is not None:
+            logger.info(f"选定的类别: {self.behavior_labels}")
     
     def _get_model_transforms(self):
         """获取模型特定的transforms（参考UCF101实现）"""
@@ -173,19 +190,195 @@ class NeonatalMultilabelDataset(Dataset):
 
         logger.info(f"优化加载完成: {len(samples)} 个有效样本")
         return samples
+
+    def _select_top_classes(self, samples):
+        """根据样本数量选择前N个类别
+
+        Args:
+            samples (list): 所有样本数据
+
+        Returns:
+            tuple: (selected_classes, class_mapping) 选定的类别列表和映射关系
+        """
+        if self.top_n_classes is None:
+            # 使用全部类别
+            selected_classes = self.original_behavior_labels.copy()
+            class_mapping = {i: i for i in range(len(selected_classes))}
+            logger.info(f"使用全部 {len(selected_classes)} 个类别")
+            return selected_classes, class_mapping
+
+        # 统计每个类别的样本数量
+        class_counts = Counter()
+        for sample in samples:
+            labels = sample['labels']
+            for i, label_value in enumerate(labels):
+                if label_value > 0:  # 正样本
+                    class_counts[i] += 1
+
+        # 按样本数量排序，选择前N个类别
+        sorted_classes = sorted(class_counts.items(), key=lambda x: x[1], reverse=True)
+
+        # 过滤掉样本数量少于阈值的类别
+        filtered_classes = [(class_idx, count) for class_idx, count in sorted_classes
+                           if count >= self.min_samples_per_class]
+
+        # 选择前top_n_classes个类别
+        selected_class_indices = [class_idx for class_idx, count in filtered_classes[:self.top_n_classes]]
+        selected_classes = [self.original_behavior_labels[i] for i in selected_class_indices]
+
+        # 创建新旧类别索引的映射关系
+        class_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(selected_class_indices)}
+
+        logger.info(f"类别筛选结果:")
+        for new_idx, old_idx in enumerate(selected_class_indices):
+            class_name = self.original_behavior_labels[old_idx]
+            count = class_counts[old_idx]
+            logger.info(f"  {new_idx}: {class_name} (原索引{old_idx}, {count}个样本)")
+
+        return selected_classes, class_mapping
+
+    def _update_sample_labels(self, samples):
+        """更新样本标签，只保留选定的类别
+
+        Args:
+            samples (list): 原始样本数据
+
+        Returns:
+            list: 更新后的样本数据
+        """
+        if self.top_n_classes is None:
+            return samples  # 不需要更新
+
+        updated_samples = []
+        for sample in samples:
+            old_labels = sample['labels']
+            new_labels = []
+
+            # 根据class_mapping重新构建标签向量
+            for new_idx in range(len(self.class_mapping)):
+                # 找到对应的原始类别索引
+                old_idx = None
+                for old_i, new_i in self.class_mapping.items():
+                    if new_i == new_idx:
+                        old_idx = old_i
+                        break
+
+                if old_idx is not None:
+                    new_labels.append(old_labels[old_idx])
+                else:
+                    new_labels.append(0.0)
+
+            # 跳过全零标签的样本
+            if sum(new_labels) == 0:
+                continue
+
+            # 创建新的样本
+            updated_sample = sample.copy()
+            updated_sample['labels'] = new_labels
+            updated_samples.append(updated_sample)
+
+        logger.info(f"标签更新完成: {len(samples)} -> {len(updated_samples)} 个有效样本")
+        return updated_samples
     
     def _split_data(self, samples, split):
-        """数据分割（8:2分割）"""
+        """数据分割（支持分层抽样）"""
         if len(samples) <= 2:
             return samples
-        
-        # 8:2分割，但确保测试集至少有1个样本
-        split_idx = max(1, int(len(samples) * 0.8))
-        
-        if split == 'train':
-            return samples[:split_idx]
-        else:
-            return samples[split_idx:]
+
+        if not self.stratified_split:
+            # 使用简单的8:2分割
+            split_idx = max(1, int(len(samples) * 0.8))
+            if split == 'train':
+                return samples[:split_idx]
+            else:
+                return samples[split_idx:]
+
+        # 使用分层抽样确保每个类别在训练集和测试集中都有代表
+        try:
+            # 为每个样本创建多标签的分层标识
+            # 使用样本的主要类别（最多正标签的类别）作为分层依据
+            stratify_labels = []
+            for sample in samples:
+                labels = sample['labels']
+                if sum(labels) == 0:
+                    stratify_labels.append(-1)  # 无标签样本
+                else:
+                    # 找到第一个正标签作为分层依据
+                    main_class = next(i for i, label in enumerate(labels) if label > 0)
+                    stratify_labels.append(main_class)
+
+            # 检查每个类别是否有足够的样本进行分层
+            class_counts = Counter(stratify_labels)
+            min_count = min(count for label, count in class_counts.items() if label != -1)
+
+            if min_count < 2:
+                # 如果某些类别样本太少，回退到简单分割
+                logger.warning(f"某些类别样本数少于2个，回退到简单分割")
+                split_idx = max(1, int(len(samples) * 0.8))
+                if split == 'train':
+                    return samples[:split_idx]
+                else:
+                    return samples[split_idx:]
+
+            # 执行分层分割
+            train_indices, test_indices = train_test_split(
+                range(len(samples)),
+                test_size=0.2,
+                stratify=stratify_labels,
+                random_state=42
+            )
+
+            if split == 'train':
+                result_samples = [samples[i] for i in train_indices]
+            else:
+                result_samples = [samples[i] for i in test_indices]
+
+            # 验证分层效果
+            self._validate_stratified_split(samples, train_indices, test_indices)
+
+            return result_samples
+
+        except Exception as e:
+            logger.warning(f"分层抽样失败: {e}，回退到简单分割")
+            # 回退到简单分割
+            split_idx = max(1, int(len(samples) * 0.8))
+            if split == 'train':
+                return samples[:split_idx]
+            else:
+                return samples[split_idx:]
+
+    def _validate_stratified_split(self, samples, train_indices, test_indices):
+        """验证分层分割的效果"""
+        train_class_counts = Counter()
+        test_class_counts = Counter()
+
+        # 统计训练集类别分布
+        for idx in train_indices:
+            labels = samples[idx]['labels']
+            for i, label_value in enumerate(labels):
+                if label_value > 0:
+                    train_class_counts[i] += 1
+
+        # 统计测试集类别分布
+        for idx in test_indices:
+            labels = samples[idx]['labels']
+            for i, label_value in enumerate(labels):
+                if label_value > 0:
+                    test_class_counts[i] += 1
+
+        # 计算分布差异
+        logger.info("分层分割验证结果:")
+        for i, class_name in enumerate(self.behavior_labels):
+            train_count = train_class_counts.get(i, 0)
+            test_count = test_class_counts.get(i, 0)
+            total_count = train_count + test_count
+
+            if total_count > 0:
+                train_ratio = train_count / total_count
+                test_ratio = test_count / total_count
+                logger.info(f"  {class_name}: 训练集{train_count}({train_ratio:.1%}) 测试集{test_count}({test_ratio:.1%})")
+            else:
+                logger.info(f"  {class_name}: 无样本")
     
     def set_model_type(self, model_type):
         """设置模型类型并更新transforms（用于网格搜索）"""

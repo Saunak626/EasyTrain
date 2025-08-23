@@ -42,9 +42,25 @@ class MultilabelMetricsCalculator:
         self.best_metrics = {
             'epoch': 0,
             'macro_avg_f1': 0.0,
-            'class_metrics': {}
+            'macro_avg_accuracy': 0.0,
+            'micro_avg_f1': 0.0,
+            'weighted_avg_f1': 0.0,
+            'class_metrics': {},
+            'macro_avg': {},
+            'micro_avg': {},
+            'weighted_avg': {}
         }
-        
+
+        # 为每个类别单独追踪最佳指标
+        self.best_class_metrics = {}
+        for class_name in class_names:
+            self.best_class_metrics[class_name] = {
+                'best_precision': {'value': 0.0, 'epoch': 0},
+                'best_recall': {'value': 0.0, 'epoch': 0},
+                'best_f1': {'value': 0.0, 'epoch': 0},
+                'best_accuracy': {'value': 0.0, 'epoch': 0}
+            }
+
         # 历史指标记录
         self.metrics_history = []
         
@@ -103,11 +119,19 @@ class MultilabelMetricsCalculator:
         micro_precision = precision_score(targets_binary, pred_binary, average='micro', zero_division=0)
         micro_recall = recall_score(targets_binary, pred_binary, average='micro', zero_division=0)
         micro_f1 = f1_score(targets_binary, pred_binary, average='micro', zero_division=0)
-        
+
+        # 微平均准确率：所有预测正确的比例
+        micro_accuracy = np.mean(pred_binary == targets_binary)
+
         # 计算加权平均指标
         weighted_precision = precision_score(targets_binary, pred_binary, average='weighted', zero_division=0)
         weighted_recall = recall_score(targets_binary, pred_binary, average='weighted', zero_division=0)
         weighted_f1 = f1_score(targets_binary, pred_binary, average='weighted', zero_division=0)
+
+        # 加权平均准确率：按类别样本数加权的准确率
+        class_weights = np.array([m['pos_samples'] + m['neg_samples'] for m in class_metrics.values()])
+        class_accuracies = np.array([m['accuracy'] for m in class_metrics.values()])
+        weighted_accuracy = np.average(class_accuracies, weights=class_weights)
         
         return {
             'class_metrics': class_metrics,
@@ -120,21 +144,23 @@ class MultilabelMetricsCalculator:
             'micro_avg': {
                 'precision': float(micro_precision),
                 'recall': float(micro_recall),
-                'f1': float(micro_f1)
+                'f1': float(micro_f1),
+                'accuracy': float(micro_accuracy)
             },
             'weighted_avg': {
                 'precision': float(weighted_precision),
                 'recall': float(weighted_recall),
-                'f1': float(weighted_f1)
+                'f1': float(weighted_f1),
+                'accuracy': float(weighted_accuracy)
             },
             'threshold': threshold,
             'total_samples': len(targets)
         }
     
-    def format_metrics_display(self, metrics: Dict[str, Any], epoch: int, 
+    def format_metrics_display(self, metrics: Dict[str, Any], epoch: int,
                              val_loss: float, train_batches: int) -> str:
-        """格式化指标显示
-        
+        """格式化指标显示（突出显示加权平均指标）
+
         Args:
             metrics: 详细指标字典
             epoch: 当前epoch
@@ -147,10 +173,13 @@ class MultilabelMetricsCalculator:
         macro_acc = metrics['macro_avg']['accuracy'] * 100
         macro_f1 = metrics['macro_avg']['f1'] * 100
         
-        # 主要指标行
+        # 主要指标行（显示三种平均准确率）
+        micro_acc = metrics['micro_avg']['accuracy'] * 100
+        weighted_acc = metrics['weighted_avg']['accuracy'] * 100
+
         main_line = (f"Epoch {epoch:03d} | val_loss={val_loss:.4f} | "
-                    f"val_acc={macro_acc:.2f}% (宏平均) | val_f1={macro_f1:.2f}% | "
-                    f"train_batches={train_batches}")
+                    f"macro_acc={macro_acc:.2f}% | micro_acc={micro_acc:.2f}% | weighted_acc={weighted_acc:.2f}% | "
+                    f"val_f1={macro_f1:.2f}% | train_batches={train_batches}")
         
         # 详细类别指标表格
         detail_lines = ["\n各类别详细指标:"]
@@ -180,35 +209,141 @@ class MultilabelMetricsCalculator:
                            f"{metrics['micro_avg']['precision']:>7.3f}  "
                            f"{metrics['micro_avg']['recall']:>7.3f}  "
                            f"{metrics['micro_avg']['f1']:>7.3f}  "
-                           f"{'':>7s}  {'':>6s}  {'':>6s}")
-        
+                           f"{metrics['micro_avg']['accuracy']:>7.3f}  "
+                           f"{'':>6s}  {'':>6s}")
+
+        # 突出显示加权平均指标（推荐用于不平衡数据）
+        detail_lines.append(f"🎯加权平均        "
+                           f"{metrics['weighted_avg']['precision']:>7.3f}  "
+                           f"{metrics['weighted_avg']['recall']:>7.3f}  "
+                           f"{metrics['weighted_avg']['f1']:>7.3f}  "
+                           f"{metrics['weighted_avg']['accuracy']:>7.3f}  "
+                           f"{'':>6s}  {'':>6s}")
+
+        # 添加说明
+        detail_lines.append("")
+        detail_lines.append("📊 指标说明:")
+        detail_lines.append("  • 宏平均: 每个类别权重相等，对稀有类别敏感")
+        detail_lines.append("  • 微平均: 按样本数量加权，对主要类别敏感")
+        detail_lines.append("  • 🎯加权平均: 按类别样本数加权，适合不平衡数据（推荐）")
+
         return main_line + "\n" + "\n".join(detail_lines)
     
     def update_best_metrics(self, metrics: Dict[str, Any], epoch: int) -> bool:
-        """更新最佳指标记录
-        
+        """更新最佳指标记录（包括每个类别的最佳指标）
+
         Args:
             metrics: 当前指标
             epoch: 当前epoch
-            
+
         Returns:
-            是否更新了最佳指标
+            是否更新了整体最佳指标
         """
         current_f1 = metrics['macro_avg']['f1']
-        
+        is_best_overall = False
+
+        # 更新整体最佳指标
         if current_f1 > self.best_metrics['macro_avg_f1']:
             self.best_metrics = {
                 'epoch': epoch,
                 'macro_avg_f1': current_f1,
+                'macro_avg_accuracy': metrics['macro_avg']['accuracy'],
+                'micro_avg_f1': metrics['micro_avg']['f1'],
+                'weighted_avg_f1': metrics['weighted_avg']['f1'],
                 'class_metrics': metrics['class_metrics'].copy(),
                 'macro_avg': metrics['macro_avg'].copy(),
                 'micro_avg': metrics['micro_avg'].copy(),
                 'weighted_avg': metrics['weighted_avg'].copy()
             }
-            return True
-        return False
-    
-    def save_metrics(self, metrics: Dict[str, Any], epoch: int, 
+            is_best_overall = True
+
+        # 更新每个类别的最佳指标
+        for class_name, class_metric in metrics['class_metrics'].items():
+            if class_name in self.best_class_metrics:
+                # 更新精确率
+                if class_metric['precision'] > self.best_class_metrics[class_name]['best_precision']['value']:
+                    self.best_class_metrics[class_name]['best_precision'] = {
+                        'value': class_metric['precision'],
+                        'epoch': epoch
+                    }
+
+                # 更新召回率
+                if class_metric['recall'] > self.best_class_metrics[class_name]['best_recall']['value']:
+                    self.best_class_metrics[class_name]['best_recall'] = {
+                        'value': class_metric['recall'],
+                        'epoch': epoch
+                    }
+
+                # 更新F1分数
+                if class_metric['f1'] > self.best_class_metrics[class_name]['best_f1']['value']:
+                    self.best_class_metrics[class_name]['best_f1'] = {
+                        'value': class_metric['f1'],
+                        'epoch': epoch
+                    }
+
+                # 更新准确率
+                if class_metric['accuracy'] > self.best_class_metrics[class_name]['best_accuracy']['value']:
+                    self.best_class_metrics[class_name]['best_accuracy'] = {
+                        'value': class_metric['accuracy'],
+                        'epoch': epoch
+                    }
+
+        # 保存最佳指标到文件
+        self.save_best_metrics_files()
+
+        return is_best_overall
+
+    def save_best_metrics_files(self):
+        """保存最佳指标到JSON和CSV文件"""
+        import json
+        import pandas as pd
+
+        # 保存整体最佳指标到JSON
+        best_metrics_json = os.path.join(self.output_dir, "best_metrics.json")
+        with open(best_metrics_json, 'w', encoding='utf-8') as f:
+            json.dump(self.best_metrics, f, ensure_ascii=False, indent=2)
+
+        # 保存每个类别的最佳指标到JSON
+        best_class_metrics_json = os.path.join(self.output_dir, "best_class_metrics.json")
+        with open(best_class_metrics_json, 'w', encoding='utf-8') as f:
+            json.dump(self.best_class_metrics, f, ensure_ascii=False, indent=2)
+
+        # 创建CSV格式的最佳指标汇总
+        csv_data = []
+        for class_name in self.class_names:
+            if class_name in self.best_class_metrics:
+                class_best = self.best_class_metrics[class_name]
+                csv_data.append({
+                    '类别名称': class_name,
+                    '最佳精确率': f"{class_best['best_precision']['value']:.4f}",
+                    '最佳精确率Epoch': class_best['best_precision']['epoch'],
+                    '最佳召回率': f"{class_best['best_recall']['value']:.4f}",
+                    '最佳召回率Epoch': class_best['best_recall']['epoch'],
+                    '最佳F1分数': f"{class_best['best_f1']['value']:.4f}",
+                    '最佳F1分数Epoch': class_best['best_f1']['epoch'],
+                    '最佳准确率': f"{class_best['best_accuracy']['value']:.4f}",
+                    '最佳准确率Epoch': class_best['best_accuracy']['epoch']
+                })
+
+        # 添加整体最佳指标
+        csv_data.append({
+            '类别名称': '🏆整体最佳',
+            '最佳精确率': f"{self.best_metrics['macro_avg']['precision']:.4f}",
+            '最佳精确率Epoch': self.best_metrics['epoch'],
+            '最佳召回率': f"{self.best_metrics['macro_avg']['recall']:.4f}",
+            '最佳召回率Epoch': self.best_metrics['epoch'],
+            '最佳F1分数': f"{self.best_metrics['macro_avg_f1']:.4f}",
+            '最佳F1分数Epoch': self.best_metrics['epoch'],
+            '最佳准确率': f"{self.best_metrics['macro_avg_accuracy']:.4f}",
+            '最佳准确率Epoch': self.best_metrics['epoch']
+        })
+
+        # 保存到CSV
+        df = pd.DataFrame(csv_data)
+        best_metrics_csv = os.path.join(self.output_dir, "best_metrics_summary.csv")
+        df.to_csv(best_metrics_csv, index=False, encoding='utf-8-sig')
+
+    def save_metrics(self, metrics: Dict[str, Any], epoch: int,
                     val_loss: float, is_best: bool = False):
         """保存指标到文件
         

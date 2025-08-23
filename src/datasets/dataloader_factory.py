@@ -86,6 +86,9 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
     elif dataset_name == "neonatal_multilabel":
         # 新生儿多标签行为识别数据集
         clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))
+        top_n_classes = kwargs.get('top_n_classes', None)
+        stratified_split = kwargs.get('stratified_split', True)
+        min_samples_per_class = kwargs.get('min_samples_per_class', 10)
 
         # 数据路径
         frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
@@ -96,7 +99,10 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             labels_file=labels_file,
             split='train',
             clip_len=clip_len,
-            model_type=model_type
+            model_type=model_type,
+            top_n_classes=top_n_classes,
+            stratified_split=stratified_split,
+            min_samples_per_class=min_samples_per_class
         )
 
         test_dataset = NeonatalMultilabelDataset(
@@ -104,7 +110,10 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             labels_file=labels_file,
             split='test',
             clip_len=clip_len,
-            model_type=model_type
+            model_type=model_type,
+            top_n_classes=top_n_classes,
+            stratified_split=stratified_split,
+            min_samples_per_class=min_samples_per_class
         )
 
         num_classes = train_dataset.get_num_classes()
@@ -194,17 +203,12 @@ def get_dataset_info(dataset_name):
             "classes": None  # 需要运行时确定
         }
     elif dataset_name == "neonatal_multilabel":
+        # 注意：实际的类别数量和类别名称需要在运行时从数据集实例获取
         return {
             "name": "Neonatal Multilabel Behavior Recognition",
-            "num_classes": 24,
+            "num_classes": None,  # 需要运行时确定（取决于top_n_classes参数）
             "input_size": (3, 16, 112, 112),  # (C, T, H, W)
-            "classes": [
-                '喂养开始', '喂养结束', '易哭闹', '张嘴闭嘴', '吸吮行为', '吃手指',
-                '吃脚指', '皱眉', '哭泣', '发脾气', '来回摇头', '手脚活动加快',
-                '寻找奶瓶', '注视奶瓶', '声调变高', '打哈欠', '睡着了', '间歇喝奶',
-                '唇部触食反应', '喂养期鬼脸', '口腔器具咬合', '头颈侧向回避',
-                '肢体张力减退', '远离奶瓶'
-            ]
+            "classes": None  # 需要运行时确定（取决于类别筛选结果）
         }
     else:
         raise ValueError(f"不支持的数据集: {dataset_name}")

@@ -195,10 +195,16 @@ def get_loss_function(loss_config=None, loss_name=None, **kwargs):
     elif loss_name == "multilabel_bce":
         # 处理正样本权重
         pos_weight = params.get('pos_weight', None)
+        num_classes = params.get('num_classes', None)
+
         if pos_weight is not None and not isinstance(pos_weight, torch.Tensor):
             # 如果是标量，创建对应维度的tensor
             if isinstance(pos_weight, (int, float)):
-                pos_weight = torch.full((24,), pos_weight)  # 新生儿数据有24个标签
+                # 动态确定类别数量
+                if num_classes is None:
+                    # 向后兼容：如果没有指定num_classes，默认使用24（原始新生儿数据）
+                    num_classes = 24
+                pos_weight = torch.full((num_classes,), pos_weight)
             else:
                 pos_weight = torch.tensor(pos_weight)
 

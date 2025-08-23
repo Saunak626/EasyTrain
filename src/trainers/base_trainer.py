@@ -354,8 +354,12 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
             # 记录详细指标到实验追踪系统
             accelerator.log({
                 "test/loss": avg_loss,
-                "test/accuracy": accuracy,
+                "test/macro_accuracy": detailed_metrics['macro_avg']['accuracy'],
+                "test/micro_accuracy": detailed_metrics['micro_avg']['accuracy'],
+                "test/weighted_accuracy": detailed_metrics['weighted_avg']['accuracy'],
                 "test/macro_f1": detailed_metrics['macro_avg']['f1'],
+                "test/micro_f1": detailed_metrics['micro_avg']['f1'],
+                "test/weighted_f1": detailed_metrics['weighted_avg']['f1'],
                 "test/macro_precision": detailed_metrics['macro_avg']['precision'],
                 "test/macro_recall": detailed_metrics['macro_avg']['recall']
             }, step=epoch)
@@ -512,8 +516,23 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     """
     hyperparams = config['hp']
 
-    # 创建损失函数 - 使用工厂函数
-    loss_fn = get_loss_function(config.get('loss', {}))
+    # 创建损失函数 - 使用工厂函数，传递类别数量信息
+    loss_config = config.get('loss', {}).copy()
+
+    # 为多标签BCE损失函数添加类别数量信息
+    if loss_config.get('name') == 'multilabel_bce' or loss_config.get('type') == 'multilabel_bce':
+        # 从数据集获取实际的类别数量
+        if hasattr(train_dataloader.dataset, 'get_num_classes'):
+            num_classes = train_dataloader.dataset.get_num_classes()
+        else:
+            # 从模型配置获取类别数量
+            num_classes = config.get('model', {}).get('params', {}).get('num_classes', 24)
+
+        if 'params' not in loss_config:
+            loss_config['params'] = {}
+        loss_config['params']['num_classes'] = num_classes
+
+    loss_fn = get_loss_function(loss_config)
 
     # 创建优化器 - 使用工厂函数
     optimizer = get_optimizer(model, config.get('optimizer', {}), hyperparams['learning_rate'])

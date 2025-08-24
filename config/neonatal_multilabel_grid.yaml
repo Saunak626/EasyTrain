@@ -35,7 +35,7 @@ model:
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
-  epochs: 5
+  epochs: 20
 
 # GPU配置
 gpu:
@@ -55,9 +55,9 @@ models_to_train:
   # - "r2plus1d_18"
   - "mvit_v1_b"
   - "mvit_v2_s"
-  - "swin3d_b"
-  - "swin3d_s"
-  - "swin3d_t"
+  # - "swin3d_b"
+  # - "swin3d_s"
+  # - "swin3d_t"
 
 # 网格搜索设置
 max_experiments: 50
@@ -92,7 +92,7 @@ grid_search:
       scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
       scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
       loss.name: ["multilabel_bce"]  # 多标签二元交叉熵损失
-      loss.params.pos_weight: [2.0]  # 正样本权重，处理类别不平衡
+      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
       
     # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     transformer_models:
@@ -108,7 +108,7 @@ grid_search:
       scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
       scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
       loss.name: ["multilabel_bce"]  # 多标签二元交叉熵损失
-      loss.params.pos_weight: [2.0]  # 正样本权重，处理类别不平衡
+      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
     
     # Swin3D模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     swin3d_models:
@@ -117,14 +117,14 @@ grid_search:
       hp.learning_rate: [0.001]  # 保守的学习率
       optimizer.name: ["adamw"]  # Swin系列推荐AdamW
       optimizer.params.weight_decay: [0.05]  # Swin系列用更大的weight_decay
-      scheduler.name: ["warmup_cosine", "step"]  # 使用更简单的调度器
+      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
       scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
       scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
       scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
       scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
       scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
       loss.name: ["multilabel_bce"]  # 多标签二元交叉熵损失
-      loss.params.pos_weight: [2.0]  # 正样本权重，处理类别不平衡
+      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
 
 # 评估指标配置（暂时注释掉，使用默认指标）
 # metrics:

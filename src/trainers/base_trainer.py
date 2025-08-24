@@ -484,6 +484,11 @@ def setup_data_and_model(config: Dict[str, Any], task_info: Dict[str, Any], data
     dataset_info = get_dataset_info(dataset_type)
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
+    # 对于多标签数据集，从实际数据集实例获取类别名称
+    if dataset_type == 'neonatal_multilabel' and hasattr(train_dataloader.dataset, 'get_class_names'):
+        dataset_info['classes'] = train_dataloader.dataset.get_class_names()
+        dataset_info['num_classes'] = len(dataset_info['classes'])
+
     # 基于任务类型创建模型
     model_factory_name = task_info['model_factory']
     model_factory = globals()[model_factory_name]
@@ -546,6 +551,43 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     lr_scheduler = get_scheduler(optimizer, scheduler_config, hyperparams)
 
     return loss_fn, optimizer, lr_scheduler
+
+
+def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
+    """根据任务类型获取输出目录
+
+    Args:
+        task_tag: 任务标签
+        dataset_type: 数据集类型
+
+    Returns:
+        任务对应的输出目录路径
+    """
+    # 基础输出目录
+    base_dir = "runs"
+
+    # 根据任务类型确定子目录名
+    if 'multilabel' in task_tag.lower() or 'multilabel' in dataset_type.lower():
+        if 'neonatal' in dataset_type.lower():
+            task_subdir = "neonatal_multilabel"
+        else:
+            task_subdir = "multilabel_classification"
+    elif 'video' in task_tag.lower():
+        task_subdir = "video_classification"
+    elif 'image' in task_tag.lower():
+        task_subdir = "image_classification"
+    elif 'text' in task_tag.lower():
+        task_subdir = "text_classification"
+    else:
+        # 默认使用数据集类型作为子目录名
+        task_subdir = dataset_type.replace('_', '_').lower() or "general"
+
+    output_dir = os.path.join(base_dir, task_subdir)
+
+    # 确保目录存在
+    os.makedirs(output_dir, exist_ok=True)
+
+    return output_dir
 
 
 def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict[str, Any],
@@ -612,7 +654,7 @@ def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict
 
 
 def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, loss_fn,
-                     train_dataloader, test_dataloader, accelerator: Accelerator) -> Tuple[float, float, int]:
+                     train_dataloader, test_dataloader, accelerator: Accelerator, metrics_calculator=None) -> Tuple[float, float, int]:
     """主训练循环
 
     负责执行完整的训练循环，包括训练和测试阶段。
@@ -626,6 +668,7 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
         train_dataloader: 已准备的训练数据加载器
         test_dataloader: 已准备的测试数据加载器
         accelerator: Accelerator实例
+        metrics_calculator: 多标签指标计算器（可选）
 
     Returns:
         Tuple[最佳准确率, 最终准确率, 训练轮数]
@@ -639,32 +682,7 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
     trained_epochs = 0
     val_accuracy = 0.0
 
-    # 初始化多标签指标计算器（如果是多标签任务）
-    metrics_calculator = None
-    task_tag = config.get('task_tag', '')
-    dataset_type = config.get('data', {}).get('type', '')
-
-    # 检测多标签任务：通过task_tag或dataset_type
-    is_multilabel_task = ('multilabel' in task_tag.lower() or
-                         'multilabel' in dataset_type.lower())
-
-    if is_multilabel_task:
-        from src.evaluation import MultilabelMetricsCalculator
-        from src.datasets import get_dataset_info
-
-        # 获取数据集信息以获取类别名称
-        dataset_name = config.get('dataset_name', 'neonatal_multilabel')
-        dataset_info = get_dataset_info(dataset_name)
-        class_names = dataset_info.get('classes', [])
-
-        if class_names:
-            metrics_calculator = MultilabelMetricsCalculator(
-                class_names=class_names,
-                output_dir="runs/neonatal"
-            )
-            if accelerator.is_main_process:
-                tqdm.write(f"📊 启用详细多标签评估，类别数: {len(class_names)}")
-                tqdm.write(f"📁 指标保存目录: runs/neonatal")
+    # metrics_calculator 现在作为参数传入
 
     # 主训练循环：执行指定轮数的训练
     for epoch in range(1, hyperparams['epochs'] + 1):
@@ -702,7 +720,8 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
 
 
 def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: float,
-                      val_accuracy: float, trained_epochs: int, tracker_config: Dict[str, Any]) -> Dict[str, Any]:
+                      val_accuracy: float, trained_epochs: int, tracker_config: Dict[str, Any],
+                      metrics_calculator=None) -> Dict[str, Any]:
     """清理和结果返回
 
     负责结束实验追踪、清理GPU缓存并返回训练结果。
@@ -714,6 +733,7 @@ def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: f
         val_accuracy: 最终准确率
         trained_epochs: 训练轮数
         tracker_config: 追踪配置
+        metrics_calculator: 多标签指标计算器
 
     Returns:
         训练结果字典
@@ -729,8 +749,8 @@ def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: f
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # 返回训练结果摘要
-    return {
+    # 准备返回结果
+    result = {
         "success": True,                       # 训练成功标志
         "exp_name": exp_name,                  # 实验名称
         "best_accuracy": best_accuracy,        # 最佳测试准确率
@@ -738,6 +758,44 @@ def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: f
         "trained_epochs": trained_epochs,      # 实际训练轮数
         "config": tracker_config               # 完整的训练配置
     }
+
+    # 如果有多标签指标计算器，添加详细的多标签指标
+    if metrics_calculator is not None:
+        best_metrics = metrics_calculator.best_metrics
+
+        # 获取最新的指标（最后一次评估的结果）
+        latest_metrics = None
+        if metrics_calculator.metrics_history:
+            latest_metrics = metrics_calculator.metrics_history[-1]
+
+        multilabel_metrics = {
+            "best": {
+                "macro_accuracy": best_metrics.get("macro_avg", {}).get("accuracy"),
+                "micro_accuracy": best_metrics.get("micro_avg", {}).get("accuracy"),
+                "weighted_accuracy": best_metrics.get("weighted_avg", {}).get("accuracy"),
+                "macro_f1": best_metrics.get("macro_avg_f1"),
+                "micro_f1": best_metrics.get("micro_avg", {}).get("f1"),
+                "weighted_f1": best_metrics.get("weighted_avg", {}).get("f1"),
+                "macro_precision": best_metrics.get("macro_avg", {}).get("precision"),
+                "macro_recall": best_metrics.get("macro_avg", {}).get("recall"),
+                "epoch": best_metrics.get("epoch")
+            }
+        }
+
+        # 添加最终指标
+        if latest_metrics:
+            multilabel_metrics["final"] = {
+                "macro_accuracy": latest_metrics.get("macro_avg", {}).get("accuracy"),
+                "micro_accuracy": latest_metrics.get("micro_avg", {}).get("accuracy"),
+                "weighted_accuracy": latest_metrics.get("weighted_avg", {}).get("accuracy"),
+                "macro_f1": latest_metrics.get("macro_avg", {}).get("f1"),
+                "micro_f1": latest_metrics.get("micro_avg", {}).get("f1"),
+                "weighted_f1": latest_metrics.get("weighted_avg", {}).get("f1"),
+            }
+
+        result["multilabel_metrics"] = multilabel_metrics
+
+    return result
 
 
 def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict[str, Any]:
@@ -775,16 +833,46 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
         model, optimizer, lr_scheduler, train_dataloader, test_dataloader
     )
 
-    # 第4步：打印实验信息
+    # 第4步：创建多标签指标计算器（如果是多标签任务）
+    metrics_calculator = None
+    task_config = config.get('task', {})
+    task_tag = task_config.get('tag', '')
+    dataset_type = config.get('data', {}).get('type', '')
+
+    # 检测多标签任务：通过dataset_type（主要）或task_tag
+    is_multilabel_task = ('multilabel' in dataset_type.lower() or
+                         'multilabel' in task_tag.lower())
+
+    if is_multilabel_task:
+        from src.evaluation import MultilabelMetricsCalculator
+
+        # 从setup_data_and_model返回的dataset_info获取类别名称
+        class_names = dataset_info.get('classes', [])
+
+        if class_names:
+            # 根据任务类型创建对应的输出目录
+            task_dir = get_task_output_dir(task_tag, dataset_type)
+            metrics_calculator = MultilabelMetricsCalculator(
+                class_names=class_names,
+                output_dir=task_dir
+            )
+            if accelerator.is_main_process:
+                tqdm.write(f"📊 启用详细多标签评估，类别数: {len(class_names)}")
+                tqdm.write(f"📁 指标保存目录: {task_dir}")
+        else:
+            if accelerator.is_main_process:
+                tqdm.write(f"⚠️ 多标签任务检测成功，但未获取到类别名称")
+
+    # 第5步：打印实验信息
     print_experiment_info(config, exp_name, task_info, dataset_info, model, train_dataloader, test_dataloader, accelerator)
 
-    # 第5步：执行训练循环
+    # 第6步：执行训练循环
     best_accuracy, val_accuracy, trained_epochs = run_training_loop(
-        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator
+        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator, metrics_calculator
     )
 
-    # 第6步：清理和返回结果
+    # 第7步：清理和返回结果
     hyperparams = config['hp']
     tracker_config = {**hyperparams, "exp_name": exp_name, "task_tag": task_tag}
 
-    return cleanup_and_return(accelerator, exp_name, best_accuracy, val_accuracy, trained_epochs, tracker_config)
+    return cleanup_and_return(accelerator, exp_name, best_accuracy, val_accuracy, trained_epochs, tracker_config, metrics_calculator)

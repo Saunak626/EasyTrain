@@ -32,8 +32,14 @@ GRID_SEARCH_CONSTANTS = {
     'group_key': 'group',
     'excluded_params': ['model.type', 'hp.batch_size'],
     'csv_base_columns': [
-        'exp_name', 'model.type', 'group', 'success',
-        'best_accuracy', 'final_accuracy', 'trained_epochs'
+        'exp_name', 'model.type', 'group', 'success', 'trained_epochs',
+        # 🎯 多标签分类关键指标（优先显示）
+        'best_weighted_f1', 'best_weighted_accuracy', 'best_macro_accuracy', 'best_micro_accuracy',
+        'best_macro_f1', 'best_micro_f1', 'best_macro_precision', 'best_macro_recall',
+        'final_weighted_f1', 'final_weighted_accuracy', 'final_macro_accuracy', 'final_micro_accuracy',
+        'final_macro_f1', 'final_micro_f1',
+        # 传统字段（向后兼容）
+        'best_accuracy', 'final_accuracy'
     ],
     'common_runtime_params': [
         'data_percentage',
@@ -430,10 +436,42 @@ class ExperimentResultsManager:
             row = {
                 "exp_name": result.get("exp_name"),
                 "success": result.get("success"),
-                "best_accuracy": result.get("best_accuracy"),
-                "final_accuracy": result.get("final_accuracy"),
                 "trained_epochs": result.get("trained_epochs", 0),
             }
+
+            # 添加多标签分类指标
+            multilabel_metrics = result.get("multilabel_metrics", {})
+            if multilabel_metrics:
+                # 最佳指标
+                best_metrics = multilabel_metrics.get("best", {})
+                row.update({
+                    "best_macro_accuracy": best_metrics.get("macro_accuracy"),
+                    "best_micro_accuracy": best_metrics.get("micro_accuracy"),
+                    "best_weighted_accuracy": best_metrics.get("weighted_accuracy"),
+                    "best_macro_f1": best_metrics.get("macro_f1"),
+                    "best_micro_f1": best_metrics.get("micro_f1"),
+                    "best_weighted_f1": best_metrics.get("weighted_f1"),
+                    "best_macro_precision": best_metrics.get("macro_precision"),
+                    "best_macro_recall": best_metrics.get("macro_recall"),
+                })
+
+                # 最终指标
+                final_metrics = multilabel_metrics.get("final", {})
+                row.update({
+                    "final_macro_accuracy": final_metrics.get("macro_accuracy"),
+                    "final_micro_accuracy": final_metrics.get("micro_accuracy"),
+                    "final_weighted_accuracy": final_metrics.get("weighted_accuracy"),
+                    "final_macro_f1": final_metrics.get("macro_f1"),
+                    "final_micro_f1": final_metrics.get("micro_f1"),
+                    "final_weighted_f1": final_metrics.get("weighted_f1"),
+                })
+
+            # 传统字段（向后兼容）
+            row.update({
+                "best_accuracy": result.get("best_accuracy"),
+                "final_accuracy": result.get("final_accuracy"),
+            })
+
             row.update(result.get("params", {}))
 
             # 只写入fieldnames中存在的字段，忽略额外字段
@@ -755,8 +793,28 @@ def run_grid_search(args):
     if len(combinations) > args.max_experiments:
         combinations = combinations[:args.max_experiments]
 
-    # 准备CSV文件
-    results_dir = "runs"
+    # 准备CSV文件 - 根据任务类型创建对应目录
+    task_tag = config.get('task', {}).get('tag', '')
+    dataset_type = config.get('data', {}).get('type', '')
+
+    # 根据任务类型确定子目录名
+    if 'multilabel' in task_tag.lower() or 'multilabel' in dataset_type.lower():
+        if 'neonatal' in dataset_type.lower():
+            task_subdir = "neonatal_multilabel"
+        else:
+            task_subdir = "multilabel_classification"
+    elif 'video' in task_tag.lower():
+        task_subdir = "video_classification"
+    elif 'image' in task_tag.lower():
+        task_subdir = "image_classification"
+    elif 'text' in task_tag.lower():
+        task_subdir = "text_classification"
+    else:
+        # 默认使用数据集类型作为子目录名
+        task_subdir = dataset_type.replace('_', '_').lower() or "general"
+
+    results_dir = os.path.join("runs", task_subdir)
+
     if args.results_file:
         # 使用命令行指定的文件名
         results_filename = args.results_file

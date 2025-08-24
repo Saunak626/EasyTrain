@@ -99,6 +99,144 @@ class FocalLoss(nn.Module):
             return focal_loss
 
 
+class MultilabelFocalLoss(nn.Module):
+    """
+    多标签Focal Loss损失函数
+
+    结合多标签二元交叉熵损失和Focal Loss机制，专门用于解决多标签分类中的类别不平衡问题。
+    通过降低易分类样本的权重，让模型更专注于难分类的样本，特别是少数类别样本。
+
+    核心特性：
+    1. 支持多标签分类（每个样本可以有多个正标签）
+    2. 自动降低易分类样本的权重（通过gamma参数控制）
+    3. 支持类别平衡（通过alpha参数控制）
+    4. 支持正样本权重（通过pos_weight参数处理正负样本不平衡）
+
+    Args:
+        alpha (float or torch.Tensor, optional): 类别平衡参数，用于平衡正负样本
+            - 如果是float，所有类别使用相同的alpha值
+            - 如果是Tensor，每个类别使用不同的alpha值
+            - 默认为1.0（不进行类别平衡）
+        gamma (float, optional): 聚焦参数，用于调整难易样本的权重
+            - gamma=0时退化为标准BCE损失
+            - gamma>0时降低易分类样本的权重
+            - 通常取值2.0，默认为2.0
+        pos_weight (torch.Tensor, optional): 正样本权重，用于处理正负样本不平衡
+            - 形状为(num_classes,)，每个类别一个权重值
+            - 默认为None（不使用正样本权重）
+        reduction (str, optional): 损失聚合方式，'mean'、'sum'或'none'，默认为'mean'
+
+    数学公式：
+        对于每个类别c和样本i：
+        FL(p_ic) = -α_c * (1 - p_ic)^γ * log(p_ic)
+
+        其中：
+        - p_ic 是样本i在类别c上的预测概率
+        - α_c 是类别c的平衡参数
+        - γ 是聚焦参数
+
+    示例：
+        >>> # 基本用法
+        >>> loss_fn = MultilabelFocalLoss(alpha=1.0, gamma=2.0)
+        >>>
+        >>> # 使用类别平衡和正样本权重
+        >>> alpha = torch.tensor([0.25, 0.75])  # 为两个类别设置不同的alpha
+        >>> pos_weight = torch.tensor([2.0, 3.0])  # 为两个类别设置不同的正样本权重
+        >>> loss_fn = MultilabelFocalLoss(alpha=alpha, gamma=2.0, pos_weight=pos_weight)
+    """
+
+    def __init__(self, alpha=1.0, gamma=2.0, pos_weight=None, reduction='mean'):
+        super(MultilabelFocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
+        self.reduction = reduction
+
+        # 如果alpha是标量，在forward中会根据类别数量扩展
+        if isinstance(alpha, (int, float)):
+            self.alpha_scalar = alpha
+            self.alpha_tensor = None
+        else:
+            self.alpha_scalar = None
+            self.alpha_tensor = alpha
+
+    def forward(self, inputs, targets):
+        """
+        计算多标签Focal Loss
+
+        Args:
+            inputs (torch.Tensor): 模型输出的logits，形状为(batch_size, num_classes)
+            targets (torch.Tensor): 真实标签，形状为(batch_size, num_classes)，值为0或1
+
+        Returns:
+            torch.Tensor: 计算得到的多标签Focal Loss
+        """
+        # 确保输入在正确的设备上
+        device = inputs.device
+        batch_size, num_classes = inputs.shape
+
+        # 将logits转换为概率
+        probs = torch.sigmoid(inputs)
+
+        # 处理alpha参数
+        if self.alpha_scalar is not None:
+            # 如果alpha是标量，为每个类别创建相同的alpha值
+            alpha = torch.full((num_classes,), self.alpha_scalar, device=device)
+        elif self.alpha_tensor is not None:
+            # 如果alpha是tensor，确保在正确的设备上
+            alpha = self.alpha_tensor.to(device)
+            if alpha.shape[0] != num_classes:
+                raise ValueError(f"alpha tensor的长度({alpha.shape[0]})必须等于类别数量({num_classes})")
+        else:
+            # 默认情况下，所有类别的alpha为1.0
+            alpha = torch.ones(num_classes, device=device)
+
+        # 处理pos_weight参数
+        pos_weight = self.pos_weight
+        if pos_weight is not None:
+            pos_weight = pos_weight.to(device)
+            if pos_weight.shape[0] != num_classes:
+                raise ValueError(f"pos_weight tensor的长度({pos_weight.shape[0]})必须等于类别数量({num_classes})")
+
+        # 计算二元交叉熵损失（不进行reduction）
+        bce_loss = F.binary_cross_entropy_with_logits(
+            inputs, targets,
+            pos_weight=pos_weight,
+            reduction='none'
+        )
+
+        # 计算pt（正确分类的概率）
+        # 对于正样本：pt = p
+        # 对于负样本：pt = 1 - p
+        pt = torch.where(targets == 1, probs, 1 - probs)
+
+        # 计算alpha权重（改进版本，避免与pos_weight冲突）
+        # 在多标签场景中，如果已经使用了pos_weight，alpha权重应该更保守
+        if pos_weight is not None:
+            # 如果使用了pos_weight，alpha权重应该更平衡，避免双重加权
+            alpha_weight = torch.where(targets == 1, alpha, alpha)  # 正负样本使用相同的alpha
+        else:
+            # 如果没有使用pos_weight，使用传统的alpha权重分配
+            alpha_weight = torch.where(targets == 1, alpha, 1 - alpha)
+
+        # 计算Focal Loss
+        # FL = -α * (1 - pt)^γ * log(pt)
+        # 由于bce_loss = -log(pt)，所以：
+        # FL = α * (1 - pt)^γ * bce_loss
+        focal_weight = alpha_weight * (1 - pt) ** self.gamma
+        focal_loss = focal_weight * bce_loss
+
+        # 应用reduction
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        elif self.reduction == 'none':
+            return focal_loss
+        else:
+            raise ValueError(f"不支持的reduction方式: {self.reduction}")
+
+
 class LabelSmoothingLoss(nn.Module):
     """
     标签平滑损失函数，用于提高模型的泛化能力
@@ -213,5 +351,57 @@ def get_loss_function(loss_config=None, loss_name=None, **kwargs):
             weight=params.get('weight', None),
             reduction=params.get('reduction', 'mean')
         )
+    elif loss_name == "focal_multilabel_bce" or loss_name == "multilabel_focal":
+        # 处理alpha参数（类别平衡参数）
+        alpha = params.get('alpha', 1.0)
+        if alpha is not None and not isinstance(alpha, torch.Tensor):
+            if isinstance(alpha, (list, tuple)):
+                alpha = torch.tensor(alpha, dtype=torch.float32)
+            # 如果是标量，保持为标量，在forward中处理
+
+        # 处理pos_weight参数（正样本权重）
+        pos_weight = params.get('pos_weight', None)
+        num_classes = params.get('num_classes', None)
+
+        if pos_weight is not None and not isinstance(pos_weight, torch.Tensor):
+            # 如果是标量，创建对应维度的tensor
+            if isinstance(pos_weight, (int, float)):
+                # 动态确定类别数量
+                if num_classes is None:
+                    # 对于新生儿多标签数据，默认使用7个类别
+                    num_classes = 7
+                pos_weight = torch.full((num_classes,), pos_weight)
+            elif isinstance(pos_weight, (list, tuple)):
+                pos_weight = torch.tensor(pos_weight, dtype=torch.float32)
+
+        return MultilabelFocalLoss(
+            alpha=alpha,
+            gamma=params.get('gamma', 2.0),
+            pos_weight=pos_weight,
+            reduction=params.get('reduction', 'mean')
+        )
+    elif loss_name == "focal_multilabel_balanced" or loss_name == "multilabel_focal_balanced":
+        # 改进版多标签Focal Loss，专门为严重类别不平衡设计
+        # 使用更保守的参数配置，避免过度预测问题
+
+        # 处理pos_weight参数
+        pos_weight = params.get('pos_weight', None)
+        num_classes = params.get('num_classes', None)
+
+        if pos_weight is not None and not isinstance(pos_weight, torch.Tensor):
+            if isinstance(pos_weight, (int, float)):
+                if num_classes is None:
+                    num_classes = 7
+                pos_weight = torch.full((num_classes,), pos_weight)
+            elif isinstance(pos_weight, (list, tuple)):
+                pos_weight = torch.tensor(pos_weight, dtype=torch.float32)
+
+        # 使用更保守的默认参数
+        return MultilabelFocalLoss(
+            alpha=params.get('alpha', 1.0),  # 默认不使用alpha权重
+            gamma=params.get('gamma', 1.0),  # 更保守的gamma值
+            pos_weight=pos_weight,
+            reduction=params.get('reduction', 'mean')
+        )
     else:
-        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse, l1, smoothl1, multilabel_bce")
+        raise ValueError(f"不支持的损失函数: {loss_name}。支持的损失函数: crossentropy, focal, labelsmoothing, mse, l1, smoothl1, multilabel_bce, focal_multilabel_bce, focal_multilabel_balanced")

@@ -71,11 +71,12 @@ grid_search:
   # 分组式搜索：每组模型有自己的超参数搜索范围
   groups:
     # 轻量级3D CNN模型组 - 使用更大的batch_size
-    # 调度器选项说明：
-    # - "step": 固定间隔降低学习率，参数：step_size, gamma
-    # - "cosine": 余弦退火，参数：eta_min_factor (最小学习率比例)
+    # 🔧 调度器选项说明（已优化学习率衰减参数）：
+    # - "step": 固定间隔降低学习率，参数：step_size, gamma（推荐：step_size=3-5, gamma=0.8-0.9）
+    # - "cosine": 余弦退火，参数：eta_min_factor（推荐：0.3-0.5，避免过低的最小学习率）
     # - "plateau": 基于验证损失自适应，参数：factor, patience, mode
     # - "warmup_cosine": Warmup+余弦退火，参数：warmup_epochs, warmup_start_factor, eta_min_factor
+    #   ⚠️ 注意：eta_min_factor不要设置过低（如0.01），建议0.3-0.5
     # - "linear": 线性衰减，参数：start_factor, end_factor
     # - "multistep": 多阶段衰减，参数：milestones, gamma
     # - "exponential": 指数衰减，参数：gamma
@@ -85,12 +86,12 @@ grid_search:
       hp.learning_rate: [0.001]  # 提高学习率，加快收敛
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.05]
-      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
-      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
-      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
-      scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
-      scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
+      scheduler.name: ["warmup_cosine", "cosine"]  # 🔧 增加更多调度器选项
+      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
+      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.3]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
+      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
       loss.name: ["multilabel_bce", "focal_multilabel_balanced", "focal_multilabel_bce"]  # 多标签二元交叉熵损失
       loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
       
@@ -101,12 +102,12 @@ grid_search:
       hp.learning_rate: [0.001]  # 降低学习率，更稳定
       optimizer.name: ["adamw"]  # Transformer首选AdamW
       optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
-      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
-      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
-      scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
-      scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
-      scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
+      scheduler.name: ["warmup_cosine", "cosine"]  # 🔧 增加更多调度器选项
+      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
+      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.3]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
+      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
       loss.name: ["multilabel_bce", "focal_multilabel_balanced", "focal_multilabel_bce"]  # 多标签二元交叉熵损失
       loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
     
@@ -117,12 +118,12 @@ grid_search:
       hp.learning_rate: [0.001]  # 保守的学习率
       optimizer.name: ["adamw"]  # Swin系列推荐AdamW
       optimizer.params.weight_decay: [0.05]  # Swin系列用更大的weight_decay
-      scheduler.name: ["warmup_cosine"]  # 使用更简单的调度器
-      scheduler.params.warmup_epochs: [1]  # Warmup期长度：1-2个epoch
+      scheduler.name: ["warmup_cosine", "step"]  # 🔧 增加step调度器选项
+      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
       scheduler.params.warmup_start_factor: [0.1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.01]  # 最小学习率为初始学习率的1%
-      scheduler.params.step_size: [5]  # 每5个epoch降低学习率（原来2→5，减缓衰减）
-      scheduler.params.gamma: [0.8]  # 学习率衰减因子（原来0.5→0.8，减小衰减幅度）
+      scheduler.params.eta_min_factor: [0.3, 0.5]  # 🔧 调整最小学习率：30%或50%
+      scheduler.params.step_size: [3, 5]  # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.8, 0.9]  # 🔧 更温和的学习率衰减因子
       loss.name: ["multilabel_bce", "focal_multilabel_balanced", "focal_multilabel_bce"]  # 多标签二元交叉熵损失
       loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
 

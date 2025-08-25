@@ -9,7 +9,6 @@
 """
 
 import os
-import json
 import torch
 import numpy as np
 import pandas as pd
@@ -294,19 +293,11 @@ class MultilabelMetricsCalculator:
         return is_best_overall
 
     def save_best_metrics_files(self):
-        """保存最佳指标到JSON和CSV文件"""
-        import json
+        """保存最佳指标到文件（仅保存CSV格式，完全移除JSON文件）"""
         import pandas as pd
 
-        # 保存整体最佳指标到JSON
-        best_metrics_json = os.path.join(self.output_dir, "best_metrics.json")
-        with open(best_metrics_json, 'w', encoding='utf-8') as f:
-            json.dump(self.best_metrics, f, ensure_ascii=False, indent=2)
-
-        # 保存每个类别的最佳指标到JSON
-        best_class_metrics_json = os.path.join(self.output_dir, "best_class_metrics.json")
-        with open(best_class_metrics_json, 'w', encoding='utf-8') as f:
-            json.dump(self.best_class_metrics, f, ensure_ascii=False, indent=2)
+        # 🚫 完全移除JSON文件保存：best_metrics.json, best_class_metrics.json
+        # 这些文件在网格搜索中会被后续实验覆盖，导致数据丢失
 
         # 创建CSV格式的最佳指标汇总
         csv_data = []
@@ -345,15 +336,18 @@ class MultilabelMetricsCalculator:
 
     def save_metrics(self, metrics: Dict[str, Any], epoch: int,
                     val_loss: float, is_best: bool = False):
-        """保存指标到文件
-        
+        """保存指标到文件（仅保存CSV格式，完全移除JSON文件）
+
+        注意：为了解决网格搜索中JSON文件被覆盖的问题，此方法已完全移除
+        epoch_XXX_metrics.json、best_metrics.json、metrics_history.json的生成。
+
         Args:
             metrics: 指标字典
             epoch: 当前epoch
             val_loss: 验证损失
             is_best: 是否为最佳指标
         """
-        # 添加到历史记录
+        # 添加到内存历史记录（用于网格搜索详情表）
         record = {
             'epoch': epoch,
             'val_loss': val_loss,
@@ -362,23 +356,13 @@ class MultilabelMetricsCalculator:
             **metrics
         }
         self.metrics_history.append(record)
-        
-        # 保存历史记录
-        history_file = os.path.join(self.output_dir, 'metrics_history.json')
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(self.metrics_history, f, ensure_ascii=False, indent=2)
-        
-        # 保存最佳指标
-        best_file = os.path.join(self.output_dir, 'best_metrics.json')
-        with open(best_file, 'w', encoding='utf-8') as f:
-            json.dump(self.best_metrics, f, ensure_ascii=False, indent=2)
-        
-        # 保存当前epoch的详细指标
-        epoch_file = os.path.join(self.output_dir, f'epoch_{epoch:03d}_metrics.json')
-        with open(epoch_file, 'w', encoding='utf-8') as f:
-            json.dump(record, f, ensure_ascii=False, indent=2)
-        
-        # 保存CSV格式的类别指标（便于分析）
+
+        # 🚫 完全移除JSON文件保存，避免网格搜索中的文件覆盖问题
+        # 原来的JSON文件：metrics_history.json, best_metrics.json, epoch_XXX_metrics.json
+        # 这些文件在网格搜索中会被后续实验覆盖，导致数据丢失
+
+        # ✅ 只保存CSV格式的类别指标历史记录
+        # CSV格式便于网格搜索详情表分析，且不会被覆盖
         self._save_class_metrics_csv(metrics, epoch)
     
     def _save_class_metrics_csv(self, metrics: Dict[str, Any], epoch: int):

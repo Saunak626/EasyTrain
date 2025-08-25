@@ -65,9 +65,20 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
         eta_min_factor = params.get('eta_min_factor', 0.0)
         eta_min = params.get('eta_min', learning_rate * eta_min_factor)
 
+        # 🔧 修复：确保T_max不为0
+        T_max = params.get('T_max', epochs)
+        if T_max <= 0:
+            print(f"⚠️ 警告：T_max={T_max} 无效，cosine调度器退化为常数学习率")
+            return lr_scheduler.ConstantLR(
+                optimizer=optimizer,
+                factor=1.0,  # 保持原始学习率
+                total_iters=max(1, epochs),
+                last_epoch=params.get('last_epoch', -1)
+            )
+
         return lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
-            T_max=params.get('T_max', epochs),
+            T_max=T_max,
             eta_min=eta_min,
             last_epoch=params.get('last_epoch', -1)
         )
@@ -107,7 +118,33 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
     elif scheduler_name == "warmup_cosine":
         # Warmup + Cosine Annealing scheduler
         warmup_epochs = params.get('warmup_epochs', max(1, epochs // 10))  # 默认10%的epoch用于warmup
-        
+
+        # 🔧 修复：当总epoch数过少时的处理逻辑
+        if epochs <= 1:
+            # 当只有1个epoch时，直接使用常数学习率调度器
+            print(f"⚠️ 警告：epochs={epochs} 过少，warmup_cosine调度器退化为常数学习率")
+            return lr_scheduler.ConstantLR(
+                optimizer=optimizer,
+                factor=1.0,  # 保持原始学习率
+                total_iters=epochs,
+                last_epoch=-1
+            )
+
+        # 确保warmup_epochs不会超过总epochs
+        warmup_epochs = min(warmup_epochs, epochs - 1)
+        cosine_epochs = epochs - warmup_epochs
+
+        # 如果cosine阶段的epoch数为0，只使用warmup
+        if cosine_epochs <= 0:
+            print(f"⚠️ 警告：cosine阶段epoch数为{cosine_epochs}，只使用warmup调度器")
+            return lr_scheduler.LinearLR(
+                optimizer=optimizer,
+                start_factor=params.get('warmup_start_factor', 0.1),
+                end_factor=1.0,
+                total_iters=epochs,
+                last_epoch=-1
+            )
+
         # 创建组合调度器：先warmup，再cosine annealing
         warmup_scheduler = lr_scheduler.LinearLR(
             optimizer=optimizer,
@@ -116,18 +153,18 @@ def get_scheduler(optimizer, scheduler_config=None, hyperparams=None, scheduler_
             total_iters=warmup_epochs,
             last_epoch=-1
         )
-        
+
         # 支持eta_min_factor参数，计算最小学习率
         eta_min_factor = params.get('eta_min_factor', 0.01)
         eta_min = params.get('eta_min', learning_rate * eta_min_factor)
 
         cosine_scheduler = lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
-            T_max=epochs - warmup_epochs,  # 剩余的epoch用于cosine annealing
+            T_max=cosine_epochs,  # 使用修复后的cosine_epochs
             eta_min=eta_min,  # 最小学习率
             last_epoch=-1
         )
-        
+
         # 使用SequentialLR组合两个调度器
         return lr_scheduler.SequentialLR(
             optimizer=optimizer,

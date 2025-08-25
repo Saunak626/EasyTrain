@@ -12,6 +12,7 @@ import csv
 import json
 import random
 import fcntl
+import hashlib
 from typing import Dict, List, Any, Optional, Tuple
 
 from datetime import datetime
@@ -376,15 +377,26 @@ class ExperimentResultsManager:
     负责管理CSV文件的创建、写入和字段名生成等操作。
     """
 
-    def __init__(self, csv_filepath: str):
-        """初始化实验结果管理器
+    def __init__(self, csv_filepath: str, details_filepath: str = None, grid_search_dir: str = None):
+        """初始化增强的实验结果管理器
 
         Args:
-            csv_filepath: CSV文件路径
+            csv_filepath: 主结果CSV文件路径
+            details_filepath: 详情CSV文件路径（可选）
+            grid_search_dir: 网格搜索根目录路径（可选）
         """
         self.csv_filepath = csv_filepath
+        self.details_filepath = details_filepath
+        self.grid_search_dir = grid_search_dir
         self.fieldnames = None
+        self.details_fieldnames = None
         self.constants = GRID_SEARCH_CONSTANTS
+
+        # 创建增强的文件夹结构
+        if self.grid_search_dir:
+            self.experiments_dir = os.path.join(self.grid_search_dir, "experiments")
+            os.makedirs(self.experiments_dir, exist_ok=True)
+            print(f"📁 创建实验文件夹结构: {self.experiments_dir}")
 
     def get_csv_fieldnames(self, all_params: List[Dict[str, Any]]) -> List[str]:
         """获取CSV文件的字段名列表
@@ -421,6 +433,31 @@ class ExperimentResultsManager:
             writer.writeheader()
 
         self.fieldnames = fieldnames
+
+        # 如果指定了详情文件，也初始化详情表
+        if self.details_filepath:
+            self.initialize_details_csv()
+
+    def initialize_details_csv(self) -> None:
+        """初始化详情CSV文件"""
+        if not self.details_filepath:
+            return
+
+        # 增强的详情表字段名
+        self.details_fieldnames = [
+            'exp_name', 'config_hash', 'epoch', '类别名称', '精确率', '召回率',
+            'F1分数', '准确率', '正样本', '负样本', 'gamma', 'alpha', 'pos_weight',
+            'learning_rate', 'loss_name', 'model_type', 'batch_size'
+        ]
+
+        details_dir = os.path.dirname(self.details_filepath)
+        os.makedirs(details_dir, exist_ok=True)
+
+        with open(self.details_filepath, "w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=self.details_fieldnames)
+            writer.writeheader()
+
+        print(f"📋 初始化详情表: {self.details_filepath}")
 
     def append_result_to_csv(self, result: Dict[str, Any]) -> None:
         """实时追加单个结果到CSV文件（线程安全）
@@ -503,12 +540,265 @@ class ExperimentResultsManager:
             if extra_fields:
                 print(f"ℹ️  忽略额外字段: {extra_fields}")
 
+            # 增强功能：保存详情表和单实验文件
+            if result.get('success', False):
+                self._save_enhanced_experiment_data(result)
+
         except Exception as e:
             print(f"⚠️  写入CSV失败: {e}")
             print(f"   文件路径: {self.csv_filepath}")
             print(f"   当前字段名: {self.fieldnames}")
             print(f"   行数据键: {list(row.keys()) if 'row' in locals() else 'N/A'}")
             print(f"   结果数据: {result}")
+
+    def _save_enhanced_experiment_data(self, result: Dict[str, Any]) -> None:
+        """保存增强的实验数据（详情表 + 单实验文件）
+
+        Args:
+            result: 实验结果数据
+        """
+        exp_name = result.get('exp_name', 'unknown')
+
+        try:
+            # 1. 保存到详情表
+            if self.details_filepath and self.details_fieldnames:
+                self._append_to_details_csv(result)
+
+            # 2. 保存单实验文件
+            if self.experiments_dir:
+                self._save_individual_experiment_files(result)
+
+        except Exception as e:
+            print(f"⚠️ 保存增强实验数据失败 ({exp_name}): {e}")
+
+    def _append_to_details_csv(self, result: Dict[str, Any]) -> None:
+        """追加详细指标到详情CSV文件
+
+        Args:
+            result: 包含detailed_metrics的实验结果
+        """
+        try:
+            # 获取详细指标
+            detailed_metrics = result.get('detailed_metrics', {})
+            if not detailed_metrics:
+                print(f"⚠️ 实验 {result.get('exp_name')} 缺少详细指标数据")
+                return
+
+            exp_name = result.get('exp_name', '')
+            params = result.get('params', {})
+
+            # 生成配置哈希
+            config_hash = self._generate_config_hash(params)
+
+            # 获取训练参数
+            gamma = params.get('loss.params.gamma', params.get('gamma', ''))
+            alpha = params.get('loss.params.alpha', params.get('alpha', ''))
+            pos_weight = params.get('loss.params.pos_weight', params.get('pos_weight', ''))
+            learning_rate = params.get('hp.learning_rate', params.get('learning_rate', ''))
+            loss_name = params.get('loss.name', '')
+            model_type = params.get('model.type', '')
+            batch_size = params.get('hp.batch_size', params.get('batch_size', ''))
+
+            # 获取最佳epoch
+            best_epoch = detailed_metrics.get('epoch', result.get('trained_epochs', 0))
+
+            # 准备详情表数据行
+            rows = []
+
+            # 1. 添加各个类别的指标
+            class_metrics = detailed_metrics.get('class_metrics', {})
+            for class_name, metrics in class_metrics.items():
+                row = {
+                    'exp_name': exp_name,
+                    'config_hash': config_hash,
+                    'epoch': best_epoch,
+                    '类别名称': class_name,
+                    '精确率': round(metrics.get('precision', 0), 4),
+                    '召回率': round(metrics.get('recall', 0), 4),
+                    'F1分数': round(metrics.get('f1', 0), 4),
+                    '准确率': round(metrics.get('accuracy', 0), 4),
+                    '正样本': metrics.get('pos_samples', 0),
+                    '负样本': metrics.get('neg_samples', 0),
+                    'gamma': gamma,
+                    'alpha': alpha,
+                    'pos_weight': pos_weight,
+                    'learning_rate': learning_rate,
+                    'loss_name': loss_name,
+                    'model_type': model_type,
+                    'batch_size': batch_size
+                }
+                rows.append(row)
+
+            # 2. 添加平均指标（作为特殊类别）
+            avg_metrics = [
+                ('🎯加权平均', detailed_metrics.get('weighted_avg', {})),
+                ('📊宏平均', detailed_metrics.get('macro_avg', {})),
+                ('📈微平均', detailed_metrics.get('micro_avg', {}))
+            ]
+
+            for avg_name, avg_data in avg_metrics:
+                if avg_data:
+                    row = {
+                        'exp_name': exp_name,
+                        'config_hash': config_hash,
+                        'epoch': best_epoch,
+                        '类别名称': avg_name,
+                        '精确率': round(avg_data.get('precision', 0), 4),
+                        '召回率': round(avg_data.get('recall', 0), 4),
+                        'F1分数': round(avg_data.get('f1', 0), 4),
+                        '准确率': round(avg_data.get('accuracy', 0), 4),
+                        '正样本': '',  # 平均指标不显示样本数
+                        '负样本': '',
+                        'gamma': gamma,
+                        'alpha': alpha,
+                        'pos_weight': pos_weight,
+                        'learning_rate': learning_rate,
+                        'loss_name': loss_name,
+                        'model_type': model_type,
+                        'batch_size': batch_size
+                    }
+                    rows.append(row)
+
+            # 批量写入详情表
+            if rows:
+                with open(self.details_filepath, "a", newline="", encoding="utf-8") as csvfile:
+                    fcntl.flock(csvfile.fileno(), fcntl.LOCK_EX)
+                    writer = csv.DictWriter(csvfile, fieldnames=self.details_fieldnames)
+                    writer.writerows(rows)
+                    csvfile.flush()
+                    fcntl.flock(csvfile.fileno(), fcntl.LOCK_UN)
+
+                print(f"📊 已保存 {len(rows)} 条详细指标到详情表 ({exp_name})")
+
+        except Exception as e:
+            print(f"⚠️ 写入详情表失败: {e}")
+
+    def _save_individual_experiment_files(self, result: Dict[str, Any]) -> None:
+        """保存单个实验的文件
+
+        Args:
+            result: 实验结果数据
+        """
+        exp_name = result.get('exp_name', 'unknown')
+
+        try:
+            # 创建单实验文件夹
+            exp_dir = os.path.join(self.experiments_dir, exp_name)
+            os.makedirs(exp_dir, exist_ok=True)
+
+            # 1. 保存实验配置
+            config_file = os.path.join(exp_dir, "config.yaml")
+            config_data = {
+                'exp_name': exp_name,
+                'parameters': result.get('params', {}),
+                'success': result.get('success', False),
+                'trained_epochs': result.get('trained_epochs', 0),
+                'timestamp': datetime.now().isoformat()
+            }
+
+            with open(config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+
+            # 2. 保存类别指标历史（如果有详细指标）
+            detailed_metrics = result.get('detailed_metrics', {})
+            if detailed_metrics and 'class_metrics' in detailed_metrics:
+                self._save_class_metrics_history(exp_dir, detailed_metrics)
+
+            # 3. 保存最佳指标汇总
+            if detailed_metrics:
+                self._save_best_metrics_summary(exp_dir, detailed_metrics)
+
+            print(f"📁 已保存单实验文件: {exp_dir}")
+
+        except Exception as e:
+            print(f"⚠️ 保存单实验文件失败 ({exp_name}): {e}")
+
+    def _save_class_metrics_history(self, exp_dir: str, detailed_metrics: Dict[str, Any]) -> None:
+        """保存类别指标历史文件"""
+        import pandas as pd
+
+        class_metrics = detailed_metrics.get('class_metrics', {})
+        epoch = detailed_metrics.get('epoch', 0)
+
+        rows = []
+        for class_name, metrics in class_metrics.items():
+            row = {
+                'epoch': epoch,
+                'class_name': class_name,
+                'precision': metrics.get('precision', 0),
+                'recall': metrics.get('recall', 0),
+                'f1': metrics.get('f1', 0),
+                'accuracy': metrics.get('accuracy', 0),
+                'pos_samples': metrics.get('pos_samples', 0),
+                'neg_samples': metrics.get('neg_samples', 0)
+            }
+            rows.append(row)
+
+        if rows:
+            df = pd.DataFrame(rows)
+            csv_file = os.path.join(exp_dir, "class_metrics_history.csv")
+            df.to_csv(csv_file, index=False, encoding='utf-8')
+
+    def _save_best_metrics_summary(self, exp_dir: str, detailed_metrics: Dict[str, Any]) -> None:
+        """保存最佳指标汇总文件"""
+        import pandas as pd
+
+        # 准备汇总数据
+        summary_data = []
+
+        # 添加各类别指标
+        class_metrics = detailed_metrics.get('class_metrics', {})
+        for class_name, metrics in class_metrics.items():
+            summary_data.append({
+                '类别名称': class_name,
+                '精确率': f"{metrics.get('precision', 0):.4f}",
+                '召回率': f"{metrics.get('recall', 0):.4f}",
+                'F1分数': f"{metrics.get('f1', 0):.4f}",
+                '准确率': f"{metrics.get('accuracy', 0):.4f}",
+                '正样本数': metrics.get('pos_samples', 0),
+                '负样本数': metrics.get('neg_samples', 0)
+            })
+
+        # 添加平均指标
+        avg_metrics = [
+            ('🎯加权平均', detailed_metrics.get('weighted_avg', {})),
+            ('📊宏平均', detailed_metrics.get('macro_avg', {})),
+            ('📈微平均', detailed_metrics.get('micro_avg', {}))
+        ]
+
+        for avg_name, avg_data in avg_metrics:
+            if avg_data:
+                summary_data.append({
+                    '类别名称': avg_name,
+                    '精确率': f"{avg_data.get('precision', 0):.4f}",
+                    '召回率': f"{avg_data.get('recall', 0):.4f}",
+                    'F1分数': f"{avg_data.get('f1', 0):.4f}",
+                    '准确率': f"{avg_data.get('accuracy', 0):.4f}",
+                    '正样本数': '',
+                    '负样本数': ''
+                })
+
+        if summary_data:
+            df = pd.DataFrame(summary_data)
+            csv_file = os.path.join(exp_dir, "best_metrics_summary.csv")
+            df.to_csv(csv_file, index=False, encoding='utf-8-sig')
+
+    def _generate_config_hash(self, params: Dict[str, Any]) -> str:
+        """生成参数配置的哈希值"""
+        # 提取关键参数用于生成哈希
+        key_params = {
+            'model_type': params.get('model.type', ''),
+            'loss_name': params.get('loss.name', ''),
+            'gamma': params.get('loss.params.gamma', params.get('gamma', '')),
+            'alpha': params.get('loss.params.alpha', params.get('alpha', '')),
+            'pos_weight': params.get('loss.params.pos_weight', params.get('pos_weight', '')),
+            'learning_rate': params.get('hp.learning_rate', params.get('learning_rate', '')),
+            'batch_size': params.get('hp.batch_size', params.get('batch_size', ''))
+        }
+
+        # 生成哈希
+        config_str = json.dumps(key_params, sort_keys=True)
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
 
 
 def load_grid_config(path: str = "config/grid.yaml") -> Dict[str, Any]:
@@ -823,22 +1113,39 @@ def run_grid_search(args):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_filename = f"grid_search_results_{timestamp}.csv"
     csv_filepath = os.path.join(results_dir, results_filename)
-    
+
+    # 创建增强的网格搜索文件夹结构
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    grid_search_dir = os.path.join(results_dir, f"grid_search_{timestamp}")
+
+    # 移动主结果文件到网格搜索目录
+    csv_filepath = os.path.join(grid_search_dir, "grid_search_results.csv")
+    details_filepath = os.path.join(grid_search_dir, "grid_search_details.csv")
+
     # 获取CSV字段名
     all_params = [params for params in combinations]
     fieldnames = get_csv_fieldnames(all_params)
-    
+
+    # 创建增强的结果管理器
+    results_manager = ExperimentResultsManager(
+        csv_filepath=csv_filepath,
+        details_filepath=details_filepath,
+        grid_search_dir=grid_search_dir
+    )
+
     # 初始化CSV文件
     if args.save_results:
-        os.makedirs(results_dir, exist_ok=True)
-        initialize_csv_file(csv_filepath, fieldnames)
+        os.makedirs(grid_search_dir, exist_ok=True)
+        results_manager.initialize_csv_file(fieldnames)
     else:
         # 不保存结果时也需要初始化
-        initialize_csv_file(csv_filepath, fieldnames)
+        results_manager.initialize_csv_file(fieldnames)
 
     print(f"🚀 开始网格搜索，共 {len(combinations)} 个实验")
     print(f"📊 使用配置文件: {args.config}")
-    print(f"💾 结果文件: {csv_filepath}")
+    print(f"📁 网格搜索目录: {grid_search_dir}")
+    print(f"💾 主结果文件: {csv_filepath}")
+    print(f"📋 详情表文件: {details_filepath}")
     
     # 处理data_percentage参数：如果未指定则使用默认值1.0
     data_percentage = args.data_percentage if args.data_percentage is not None else 1.0
@@ -874,10 +1181,10 @@ def run_grid_search(args):
         if result["success"]:
             successful += 1
             
-        # 实时写入CSV
+        # 实时写入CSV（包括增强功能）
         if args.save_results:
             print(f"💾 写入实验结果到CSV: {result.get('exp_name', 'unknown')}")
-            append_result_to_csv(result, csv_filepath, fieldnames)
+            results_manager.append_result_to_csv(result)
             
         # 实时显示最佳结果
         if successful > 0:
@@ -905,7 +1212,9 @@ def run_grid_search(args):
             print(f"{i}. {r['exp_name']} - {r['best_accuracy']:.2f}% - {r['params']}")
 
     if args.save_results:
-        print(f"💾 结果已实时保存到: {csv_filepath}")
+        print(f"💾 主结果已实时保存到: {csv_filepath}")
+        print(f"📋 详情表已实时保存到: {details_filepath}")
+        print(f"📁 单实验文件已保存到: {results_manager.experiments_dir}")
 
     return 0 if successful > 0 else 1
 

@@ -795,6 +795,9 @@ def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: f
 
         result["multilabel_metrics"] = multilabel_metrics
 
+        # 为网格搜索详情表添加完整的详细指标
+        result["detailed_metrics"] = best_metrics
+
     return result
 
 

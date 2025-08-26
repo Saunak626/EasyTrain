@@ -361,14 +361,17 @@ class MultilabelMetricsCalculator:
         # 原来的JSON文件：metrics_history.json, best_metrics.json, epoch_XXX_metrics.json
         # 这些文件在网格搜索中会被后续实验覆盖，导致数据丢失
 
-        # ✅ 只保存CSV格式的类别指标历史记录
+        # ✅ 保存CSV格式的类别指标历史记录（每个epoch都保存）
         # CSV格式便于网格搜索详情表分析，且不会被覆盖
         self._save_class_metrics_csv(metrics, epoch)
     
     def _save_class_metrics_csv(self, metrics: Dict[str, Any], epoch: int):
-        """保存类别指标到CSV文件"""
+        """保存类别指标到CSV文件（记录每个epoch的指标变化）
+
+        注意：此方法现在记录每个epoch的指标，而不是只记录最佳epoch
+        """
         csv_file = os.path.join(self.output_dir, 'class_metrics_history.csv')
-        
+
         # 准备数据
         rows = []
         for class_name, class_metric in metrics['class_metrics'].items():
@@ -383,10 +386,78 @@ class MultilabelMetricsCalculator:
                 'neg_samples': class_metric['neg_samples']
             }
             rows.append(row)
-        
+
         # 创建DataFrame
         df = pd.DataFrame(rows)
-        
+
+        # 追加到CSV文件（每个epoch都会追加）
+        if os.path.exists(csv_file):
+            df.to_csv(csv_file, mode='a', header=False, index=False, encoding='utf-8')
+        else:
+            df.to_csv(csv_file, index=False, encoding='utf-8')
+
+    def save_train_metrics(self, metrics: Dict[str, Any], epoch: int, train_loss: float):
+        """保存训练集指标到单独的CSV文件
+
+        Args:
+            metrics: 训练集指标字典
+            epoch: 当前epoch
+            train_loss: 训练损失
+        """
+        csv_file = os.path.join(self.output_dir, 'train_metrics_history.csv')
+
+        # 准备数据
+        rows = []
+        for class_name, class_metric in metrics['class_metrics'].items():
+            row = {
+                'epoch': epoch,
+                'class_name': class_name,
+                'precision': class_metric['precision'],
+                'recall': class_metric['recall'],
+                'f1': class_metric['f1'],
+                'accuracy': class_metric['accuracy'],
+                'pos_samples': class_metric['pos_samples'],
+                'neg_samples': class_metric['neg_samples']
+            }
+            rows.append(row)
+
+        # 创建DataFrame
+        df = pd.DataFrame(rows)
+
+        # 追加到CSV文件
+        if os.path.exists(csv_file):
+            df.to_csv(csv_file, mode='a', header=False, index=False, encoding='utf-8')
+        else:
+            df.to_csv(csv_file, index=False, encoding='utf-8')
+
+    def save_test_metrics(self, metrics: Dict[str, Any], epoch: int, test_loss: float):
+        """保存测试集指标到单独的CSV文件
+
+        Args:
+            metrics: 测试集指标字典
+            epoch: 当前epoch
+            test_loss: 测试损失
+        """
+        csv_file = os.path.join(self.output_dir, 'test_metrics_history.csv')
+
+        # 准备数据
+        rows = []
+        for class_name, class_metric in metrics['class_metrics'].items():
+            row = {
+                'epoch': epoch,
+                'class_name': class_name,
+                'precision': class_metric['precision'],
+                'recall': class_metric['recall'],
+                'f1': class_metric['f1'],
+                'accuracy': class_metric['accuracy'],
+                'pos_samples': class_metric['pos_samples'],
+                'neg_samples': class_metric['neg_samples']
+            }
+            rows.append(row)
+
+        # 创建DataFrame
+        df = pd.DataFrame(rows)
+
         # 追加到CSV文件
         if os.path.exists(csv_file):
             df.to_csv(csv_file, mode='a', header=False, index=False, encoding='utf-8')

@@ -699,12 +699,15 @@ class ExperimentResultsManager:
             with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
 
-            # 2. 保存类别指标历史（如果有详细指标）
+            # 2. 复制训练过程中生成的逐epoch指标文件
+            self._copy_epoch_metrics_files(exp_dir, result)
+
+            # 3. 保存类别指标历史（如果有详细指标）
             detailed_metrics = result.get('detailed_metrics', {})
             if detailed_metrics and 'class_metrics' in detailed_metrics:
                 self._save_class_metrics_history(exp_dir, detailed_metrics)
 
-            # 3. 保存最佳指标汇总
+            # 4. 保存最佳指标汇总
             if detailed_metrics:
                 self._save_best_metrics_summary(exp_dir, detailed_metrics)
 
@@ -714,7 +717,11 @@ class ExperimentResultsManager:
             print(f"⚠️ 保存单实验文件失败 ({exp_name}): {e}")
 
     def _save_class_metrics_history(self, exp_dir: str, detailed_metrics: Dict[str, Any]) -> None:
-        """保存类别指标历史文件"""
+        """保存类别指标历史文件（现在只保存最佳epoch的指标，与best_metrics_summary.csv功能类似）
+
+        注意：此方法现在主要用于向后兼容，实际的逐epoch指标记录由训练器中的
+        train_metrics_history.csv和test_metrics_history.csv文件处理
+        """
         import pandas as pd
 
         class_metrics = detailed_metrics.get('class_metrics', {})
@@ -738,6 +745,51 @@ class ExperimentResultsManager:
             df = pd.DataFrame(rows)
             csv_file = os.path.join(exp_dir, "class_metrics_history.csv")
             df.to_csv(csv_file, index=False, encoding='utf-8')
+
+    def _copy_epoch_metrics_files(self, exp_dir: str, result: Dict[str, Any]) -> None:
+        """复制训练过程中生成的逐epoch指标文件到单实验文件夹
+
+        Args:
+            exp_dir: 单实验文件夹路径
+            result: 实验结果数据
+        """
+        import shutil
+
+        # 获取原始指标文件的路径（从训练器的输出目录）
+        detailed_metrics = result.get('detailed_metrics', {})
+        if not detailed_metrics:
+            return
+
+        # 尝试从config中获取任务输出目录
+        config = result.get('config', {})
+        task_config = config.get('task', {})
+        task_tag = task_config.get('tag', '')
+        dataset_type = config.get('data', {}).get('type', '')
+
+        # 构建原始输出目录路径
+        if 'multilabel' in dataset_type.lower() or 'multilabel' in task_tag.lower():
+            from src.trainers.base_trainer import get_task_output_dir
+            source_dir = get_task_output_dir(task_tag, dataset_type)
+
+            # 需要复制的文件列表
+            files_to_copy = [
+                'train_metrics_history.csv',  # 训练集逐epoch指标
+                'test_metrics_history.csv',   # 测试集逐epoch指标
+                'class_metrics_history.csv'   # 原有的类别指标历史（现在记录每个epoch）
+            ]
+
+            for filename in files_to_copy:
+                source_file = os.path.join(source_dir, filename)
+                target_file = os.path.join(exp_dir, filename)
+
+                if os.path.exists(source_file):
+                    try:
+                        shutil.copy2(source_file, target_file)
+                        print(f"📋 已复制指标文件: {filename}")
+                    except Exception as e:
+                        print(f"⚠️ 复制指标文件失败 ({filename}): {e}")
+                else:
+                    print(f"⚠️ 指标文件不存在: {source_file}")
 
     def _save_best_metrics_summary(self, exp_dir: str, detailed_metrics: Dict[str, Any]) -> None:
         """保存最佳指标汇总文件"""

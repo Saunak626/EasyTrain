@@ -162,7 +162,8 @@ def print_learning_rate_info(lr_info, epoch, total_epochs, phase="开始"):
           f"当前LR: {lr_info['current_lr']:.6f}")
 
 
-def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch):
+def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch,
+                metrics_calculator=None):
     """执行单个训练轮次
 
     Args:
@@ -173,13 +174,19 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         lr_scheduler: 学习率调度器
         accelerator: Accelerator实例
         epoch: 当前轮次编号
+        metrics_calculator: 多标签指标计算器（可选）
 
     Returns:
-        float: 平均训练损失
+        tuple: (平均训练损失, 训练准确率)
     """
     model.train()
     total_loss = 0.0
     num_batches = 0
+
+    # 🔧 新增：收集训练数据用于指标计算
+    all_predictions = []
+    all_targets = []
+    is_multilabel = metrics_calculator is not None
 
     # 使用统一的进度条管理器
     progress_manager = ProgressBarManager(accelerator)
@@ -196,6 +203,20 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
 
         total_loss += loss.item()
         num_batches += 1
+
+        # 🔧 新增：收集预测和目标数据（用于训练集指标计算）
+        if is_multilabel:
+            # 收集预测概率和目标标签
+            gathered_outputs = accelerator.gather(outputs)
+            gathered_targets = accelerator.gather(targets)
+
+            if accelerator.is_main_process:
+                # 🔧 修复：应用sigmoid获取概率，并正确处理梯度
+                probs = torch.sigmoid(gathered_outputs).detach().cpu().numpy()
+                targets_np = gathered_targets.detach().cpu().numpy()
+
+                all_predictions.append(probs)
+                all_targets.append(targets_np)
 
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
@@ -215,9 +236,48 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     if progress_bar:
         progress_bar.close()
 
-    # 返回平均训练损失
+    # 计算平均训练损失
     avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    return avg_train_loss
+
+    # 🔧 新增：计算训练集指标（如果是多标签任务）
+    train_accuracy = 0.0
+    if is_multilabel and all_predictions and accelerator.is_main_process:
+        # 合并所有批次的预测和目标
+        all_pred_array = np.concatenate(all_predictions, axis=0)
+        all_target_array = np.concatenate(all_targets, axis=0)
+
+        # 计算训练集详细指标
+        train_metrics = metrics_calculator.calculate_detailed_metrics(
+            all_pred_array, all_target_array, threshold=0.5
+        )
+
+        # 保存训练集指标到单独的CSV文件
+        metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
+
+        # 记录训练集指标到SwanLab
+        accelerator.log({
+            "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
+            "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
+            "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
+            "train/macro_f1": train_metrics['macro_avg']['f1'],
+            "train/micro_f1": train_metrics['micro_avg']['f1'],
+            "train/weighted_f1": train_metrics['weighted_avg']['f1'],
+            "train/macro_precision": train_metrics['macro_avg']['precision'],
+            "train/macro_recall": train_metrics['macro_avg']['recall']
+        }, step=epoch)
+
+        # 🔧 新增：记录每个类别的训练指标到SwanLab
+        for class_name, class_metrics in train_metrics['class_metrics'].items():
+            accelerator.log({
+                f"train_class/{class_name}/f1": class_metrics['f1'],
+                f"train_class/{class_name}/precision": class_metrics['precision'],
+                f"train_class/{class_name}/recall": class_metrics['recall'],
+                f"train_class/{class_name}/accuracy": class_metrics['accuracy']
+            }, step=epoch)
+
+        train_accuracy = train_metrics['macro_avg']['accuracy']
+
+    return avg_train_loss, train_accuracy
 
 
 def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=None,
@@ -339,8 +399,11 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
             # 更新最佳指标
             is_best = metrics_calculator.update_best_metrics(detailed_metrics, epoch)
 
-            # 保存指标
+            # 保存指标（保持原有功能）
             metrics_calculator.save_metrics(detailed_metrics, epoch, avg_loss, is_best)
+
+            # 🔧 新增：保存测试集指标到单独的CSV文件
+            metrics_calculator.save_test_metrics(detailed_metrics, epoch, avg_loss)
 
             # 显示详细指标
             detailed_display = metrics_calculator.format_metrics_display(
@@ -363,6 +426,15 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
                 "test/macro_precision": detailed_metrics['macro_avg']['precision'],
                 "test/macro_recall": detailed_metrics['macro_avg']['recall']
             }, step=epoch)
+
+            # 🔧 新增：记录每个类别的测试指标到SwanLab
+            for class_name, class_metrics in detailed_metrics['class_metrics'].items():
+                accelerator.log({
+                    f"test_class/{class_name}/f1": class_metrics['f1'],
+                    f"test_class/{class_name}/precision": class_metrics['precision'],
+                    f"test_class/{class_name}/recall": class_metrics['recall'],
+                    f"test_class/{class_name}/accuracy": class_metrics['accuracy']
+                }, step=epoch)
         else:
             # 标准输出（单标签或无详细评估）
             log_msg = f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%'
@@ -691,8 +763,8 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
             lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
             print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
 
-        # 训练epoch
-        train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch)
+        # 训练epoch（传递metrics_calculator用于训练集指标计算）
+        train_loss, train_accuracy = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, metrics_calculator)
         # 测试epoch
         _, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch,
                                    train_batches=len(train_dataloader),

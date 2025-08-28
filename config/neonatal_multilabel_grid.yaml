@@ -24,14 +24,14 @@ data:
   num_workers: 12       # 减少工作进程数，避免CPU和内存过载
   params:
     clip_len: 16      # 每个视频片段的帧数
-    top_n_classes: 7  # 只使用样本数量前7多的类别，减少稀有类别干扰
+    top_n_classes: 10  # 只使用样本数量前7多的类别，减少稀有类别干扰
     stratified_split: true  # 启用分层抽样，确保训练测试集类别分布一致
     min_samples_per_class: 10  # 类别最小样本数阈值
 
-# 模型配置（仅保留必要的基础参数）
-model:
-  params:
-    num_classes: 7  # 使用筛选后的类别数量（与top_n_classes保持一致）
+# # 模型配置（仅保留必要的基础参数）
+# model:
+#   params:
+#     num_classes: 7  # 使用筛选后的类别数量（与top_n_classes保持一致）
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:

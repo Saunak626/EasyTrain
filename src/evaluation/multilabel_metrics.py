@@ -316,18 +316,32 @@ class MultilabelMetricsCalculator:
                     '最佳准确率Epoch': class_best['best_accuracy']['epoch']
                 })
 
-        # 添加整体最佳指标
-        csv_data.append({
-            '类别名称': '🏆整体最佳',
-            '最佳精确率': f"{self.best_metrics['macro_avg']['precision']:.4f}",
-            '最佳精确率Epoch': self.best_metrics['epoch'],
-            '最佳召回率': f"{self.best_metrics['macro_avg']['recall']:.4f}",
-            '最佳召回率Epoch': self.best_metrics['epoch'],
-            '最佳F1分数': f"{self.best_metrics['macro_avg_f1']:.4f}",
-            '最佳F1分数Epoch': self.best_metrics['epoch'],
-            '最佳准确率': f"{self.best_metrics['macro_avg_accuracy']:.4f}",
-            '最佳准确率Epoch': self.best_metrics['epoch']
-        })
+        # 🔧 修复：只有当best_metrics包含完整数据时才添加整体最佳指标
+        if 'macro_avg' in self.best_metrics and self.best_metrics['macro_avg']:
+            csv_data.append({
+                '类别名称': '🏆整体最佳',
+                '最佳精确率': f"{self.best_metrics['macro_avg']['precision']:.4f}",
+                '最佳精确率Epoch': self.best_metrics['epoch'],
+                '最佳召回率': f"{self.best_metrics['macro_avg']['recall']:.4f}",
+                '最佳召回率Epoch': self.best_metrics['epoch'],
+                '最佳F1分数': f"{self.best_metrics['macro_avg_f1']:.4f}",
+                '最佳F1分数Epoch': self.best_metrics['epoch'],
+                '最佳准确率': f"{self.best_metrics['macro_avg_accuracy']:.4f}",
+                '最佳准确率Epoch': self.best_metrics['epoch']
+            })
+        else:
+            # 如果还没有最佳指标，添加占位符
+            csv_data.append({
+                '类别名称': '🏆整体最佳',
+                '最佳精确率': '待更新',
+                '最佳精确率Epoch': 0,
+                '最佳召回率': '待更新',
+                '最佳召回率Epoch': 0,
+                '最佳F1分数': '待更新',
+                '最佳F1分数Epoch': 0,
+                '最佳准确率': '待更新',
+                '最佳准确率Epoch': 0
+            })
 
         # 保存到CSV
         df = pd.DataFrame(csv_data)

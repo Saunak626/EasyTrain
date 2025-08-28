@@ -335,7 +335,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
 
             if is_multilabel:
                 # 多标签分类：使用每类别平均准确率
-                predictions = torch.sigmoid(outputs) > 0.5
+                predictions = torch.sigmoid(outputs) > 0.5 # TODO:
                 targets_bool = targets.bool()
 
                 # 收集预测和目标数据用于详细评估
@@ -596,18 +596,31 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     # 创建损失函数 - 使用工厂函数，传递类别数量信息
     loss_config = config.get('loss', {}).copy()
 
-    # 为多标签BCE损失函数添加类别数量信息
-    if loss_config.get('name') == 'multilabel_bce' or loss_config.get('type') == 'multilabel_bce':
+    # 🔧 修复：为所有多标签损失函数添加类别数量信息
+    multilabel_loss_types = [
+        'multilabel_bce',
+        'focal_multilabel_bce',
+        'focal_multilabel_balanced',
+        'multilabel_focal_balanced'
+    ]
+
+    loss_name = loss_config.get('name') or loss_config.get('type')
+    if loss_name in multilabel_loss_types:
         # 从数据集获取实际的类别数量
         if hasattr(train_dataloader.dataset, 'get_num_classes'):
             num_classes = train_dataloader.dataset.get_num_classes()
         else:
-            # 从模型配置获取类别数量
+            # 从模型配置获取类别数量（向后兼容）
             num_classes = config.get('model', {}).get('params', {}).get('num_classes', 24)
 
         if 'params' not in loss_config:
             loss_config['params'] = {}
         loss_config['params']['num_classes'] = num_classes
+
+        # 🔧 调试信息：确认参数传递
+        print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
+        print(f"   数据集类别数: {train_dataloader.dataset.get_num_classes() if hasattr(train_dataloader.dataset, 'get_num_classes') else '未知'}")
+        print(f"   数据集类别名: {train_dataloader.dataset.get_class_names() if hasattr(train_dataloader.dataset, 'get_class_names') else '未知'}")
 
     loss_fn = get_loss_function(loss_config)
 

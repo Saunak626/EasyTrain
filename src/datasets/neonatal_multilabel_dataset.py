@@ -39,7 +39,8 @@ class NeonatalMultilabelDataset(Dataset):
     """
     
     def __init__(self, frames_dir, labels_file, split='train', clip_len=16, model_type=None,
-                 top_n_classes=None, stratified_split=True, min_samples_per_class=10):
+                 top_n_classes=None, stratified_split=True, min_samples_per_class=10,
+                 sampling_mode='random', target_fps=None, original_fps=16):
         """初始化新生儿多标签数据集
 
         Args:
@@ -51,6 +52,9 @@ class NeonatalMultilabelDataset(Dataset):
             top_n_classes (int, optional): 只使用样本数量前N多的类别，None表示使用全部类别
             stratified_split (bool): 是否使用分层抽样进行数据划分，默认True
             min_samples_per_class (int): 类别最小样本数阈值，默认10
+            sampling_mode (str): 采样模式，'random'或'fps'，默认'random'
+            target_fps (float, optional): 目标采样帧率，仅在sampling_mode='fps'时使用
+            original_fps (float): 原始视频帧率，默认16fps
         """
         self.frames_dir = frames_dir
         self.labels_file = labels_file
@@ -60,6 +64,14 @@ class NeonatalMultilabelDataset(Dataset):
         self.top_n_classes = top_n_classes
         self.stratified_split = stratified_split
         self.min_samples_per_class = min_samples_per_class
+
+        # FPS采样相关参数
+        self.sampling_mode = sampling_mode
+        self.target_fps = target_fps
+        self.original_fps = original_fps
+
+        # 参数验证
+        self._validate_sampling_params()
 
         # 获取模型特定的transforms
         self.model_transforms = self._get_model_transforms()
@@ -97,9 +109,94 @@ class NeonatalMultilabelDataset(Dataset):
         self.samples = self._split_data(all_samples, split)
 
         logger.info(f"加载 {split} 数据集: {len(self.samples)} 个样本，使用 {self.num_classes} 个类别")
+        if self.sampling_mode == 'fps':
+            logger.info(f"使用FPS采样模式: target_fps={self.target_fps}, original_fps={self.original_fps}")
         if self.top_n_classes is not None:
             logger.info(f"选定的类别: {self.behavior_labels}")
-    
+
+    def _validate_sampling_params(self):
+        """验证采样参数的有效性"""
+        if self.sampling_mode not in ['random', 'fps']:
+            raise ValueError(f"不支持的采样模式: {self.sampling_mode}。支持的模式: 'random', 'fps'")
+
+        if self.sampling_mode == 'fps':
+            if self.target_fps is None:
+                raise ValueError("使用FPS采样模式时，必须指定target_fps参数")
+            if self.target_fps <= 0:
+                raise ValueError(f"target_fps必须大于0，当前值: {self.target_fps}")
+            if self.original_fps <= 0:
+                raise ValueError(f"original_fps必须大于0，当前值: {self.original_fps}")
+
+    def fps_sampling_neonatal(self, buffer, clip_len, target_fps, original_fps=16, min_fps=4):
+        """针对新生儿数据集优化的FPS采样方法
+
+        专门针对5秒左右的短视频进行优化，确保采样质量不低于4fps。
+
+        Args:
+            buffer (np.ndarray): 输入视频帧缓冲区，形状为(T, H, W, C)
+            clip_len (int): 目标输出帧数
+            target_fps (float): 目标采样帧率
+            original_fps (float): 原始视频帧率，默认16fps
+            min_fps (float): 最低采样帧率限制，默认4fps
+
+        Returns:
+            np.ndarray: 采样后的帧缓冲区，形状为(clip_len, H, W, C)
+        """
+        total_frames = buffer.shape[0]
+
+        # 应用最低FPS限制（针对新生儿数据集的特殊要求）
+        effective_fps = max(target_fps, min_fps)
+
+        # 计算采样间隔
+        interval = original_fps / effective_fps
+
+        # 生成采样索引
+        indices = []
+        current_idx = 0.0
+
+        while len(indices) < clip_len and int(current_idx) < total_frames:
+            indices.append(int(current_idx))
+            current_idx += interval
+
+        # 针对短视频的帧数不足处理策略
+        if len(indices) < clip_len:
+            # 策略1: 从视频开始位置进行更密集的采样
+            remaining_frames = clip_len - len(indices)
+
+            # 计算更密集的间隔，确保能够采样到足够的帧
+            if total_frames >= clip_len:
+                # 如果总帧数足够，使用均匀分布采样
+                dense_interval = (total_frames - 1) / (clip_len - 1)
+                indices = [int(i * dense_interval) for i in range(clip_len)]
+            else:
+                # 如果总帧数不足，先均匀采样所有帧，然后重复关键帧
+                indices = list(range(total_frames))
+
+                # 重复关键帧填充到clip_len
+                while len(indices) < clip_len:
+                    # 优先重复中间帧和最后帧
+                    if total_frames > 1:
+                        mid_frame = total_frames // 2
+                        last_frame = total_frames - 1
+                        indices.extend([mid_frame, last_frame])
+                    else:
+                        # 只有一帧的情况，重复该帧
+                        indices.append(0)
+
+                # 截断到所需长度
+                indices = indices[:clip_len]
+
+        # 如果采样帧数超过clip_len，截断
+        indices = indices[:clip_len]
+
+        # 确保索引不超出范围
+        indices = [min(idx, total_frames - 1) for idx in indices]
+
+        # 采样帧
+        sampled_buffer = buffer[indices]
+
+        return sampled_buffer
+
     def _get_model_transforms(self):
         """获取模型特定的transforms（参考UCF101实现）"""
         if self.model_type:
@@ -397,17 +494,22 @@ class NeonatalMultilabelDataset(Dataset):
         
         # 如果有模型特定的transforms，使用官方transforms
         if self.model_transforms is not None:
-            # 简单的时间维度采样，保持原始空间尺寸
-            if buffer.shape[0] > self.clip_len:
-                # 随机选择起始帧
-                start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
-                buffer = buffer[start_idx:start_idx + self.clip_len]
-            elif buffer.shape[0] < self.clip_len:
-                # 重复最后一帧
-                last_frame = buffer[-1]
-                pad_size = self.clip_len - buffer.shape[0]
-                padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
-                buffer = np.concatenate([buffer, padding], axis=0)
+            # 根据采样模式选择采样策略
+            if self.sampling_mode == 'fps' and self.target_fps is not None:
+                # 使用针对新生儿数据集优化的FPS采样
+                buffer = self.fps_sampling_neonatal(buffer, self.clip_len, self.target_fps, self.original_fps)
+            else:
+                # 使用传统的随机采样（默认模式）
+                if buffer.shape[0] > self.clip_len:
+                    # 随机选择起始帧
+                    start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
+                    buffer = buffer[start_idx:start_idx + self.clip_len]
+                elif buffer.shape[0] < self.clip_len:
+                    # 重复最后一帧
+                    last_frame = buffer[-1]
+                    pad_size = self.clip_len - buffer.shape[0]
+                    padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
+                    buffer = np.concatenate([buffer, padding], axis=0)
 
             # 转换为torch tensor格式: (T, H, W, C) -> (T, C, H, W)
             buffer = torch.from_numpy(buffer).float() / 255.0
@@ -417,7 +519,16 @@ class NeonatalMultilabelDataset(Dataset):
             buffer = self.model_transforms(buffer)
         else:
             # 使用传统的预处理方式（向后兼容）
-            buffer = self.crop(buffer, self.clip_len, self.crop_size)
+            # 根据采样模式选择采样策略
+            if self.sampling_mode == 'fps' and self.target_fps is not None:
+                # 使用针对新生儿数据集优化的FPS采样
+                buffer = self.fps_sampling_neonatal(buffer, self.clip_len, self.target_fps, self.original_fps)
+                # 应用传统的空间裁剪和预处理
+                buffer = self.crop_spatial_only(buffer, self.crop_size)
+            else:
+                # 使用传统的时空裁剪（默认模式）
+                buffer = self.crop(buffer, self.clip_len, self.crop_size)
+
             buffer = self.normalize(buffer)  # 对模型进行归一化处理
             buffer = self.to_tensor(buffer)  # 对维度进行转化
             buffer = torch.from_numpy(buffer)
@@ -497,6 +608,28 @@ class NeonatalMultilabelDataset(Dataset):
         buffer = buffer[time_index:time_index + clip_len, :, :, :]
 
         # 处理空间维度 - 如果输入尺寸小于crop_size，则resize；否则随机裁剪
+        target_shape = (clip_len, crop_size, crop_size, 3)
+
+        if buffer.shape[1] < crop_size or buffer.shape[2] < crop_size:
+            # 输入尺寸小于目标尺寸，进行resize
+            resized_buffer = np.zeros(target_shape, dtype=buffer.dtype)
+            for i in range(clip_len):
+                resized_buffer[i] = cv2.resize(buffer[i], (crop_size, crop_size))
+            return resized_buffer
+        else:
+            # 输入尺寸大于等于目标尺寸，进行随机裁剪
+            height_index = np.random.randint(buffer.shape[1] - crop_size)
+            width_index = np.random.randint(buffer.shape[2] - crop_size)
+
+            buffer = buffer[:,
+                            height_index:height_index + crop_size,
+                            width_index:width_index + crop_size, :]
+            return buffer
+
+    def crop_spatial_only(self, buffer, crop_size):
+        """仅进行空间裁剪，不进行时间维度裁剪（用于FPS采样后的处理）"""
+        # 处理空间维度 - 如果输入尺寸小于crop_size，则resize；否则随机裁剪
+        clip_len = buffer.shape[0]
         target_shape = (clip_len, crop_size, crop_size, 3)
 
         if buffer.shape[1] < crop_size or buffer.shape[2] < crop_size:

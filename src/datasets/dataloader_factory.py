@@ -67,18 +67,29 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         # 统一使用VideoDataset处理UCF-101视频数据（从预处理帧图像加载）
         clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))  # 兼容两种参数名
 
+        # FPS采样相关参数
+        sampling_mode = kwargs.get('sampling_mode', 'random')
+        target_fps = kwargs.get('target_fps', None)
+        original_fps = kwargs.get('original_fps', 16)
+
         train_dataset = VideoDataset(
             dataset_path=data_dir,
             images_path='train',
             clip_len=clip_len,
-            model_type=model_type  # 传递模型类型用于动态transforms
+            model_type=model_type,  # 传递模型类型用于动态transforms
+            sampling_mode=sampling_mode,
+            target_fps=target_fps,
+            original_fps=original_fps
         )
 
         # 将val和test合并作为测试集
         test_dataset = CombinedVideoDataset(
             dataset_path=data_dir,
             clip_len=clip_len,
-            model_type=model_type  # 传递模型类型用于动态transforms
+            model_type=model_type,  # 传递模型类型用于动态transforms
+            sampling_mode=sampling_mode,
+            target_fps=target_fps,
+            original_fps=original_fps
         )
 
         num_classes = 101  # UCF-101固定为101个类别
@@ -89,6 +100,11 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         top_n_classes = kwargs.get('top_n_classes', None)
         stratified_split = kwargs.get('stratified_split', True)
         min_samples_per_class = kwargs.get('min_samples_per_class', 10)
+
+        # FPS采样相关参数
+        sampling_mode = kwargs.get('sampling_mode', 'random')
+        target_fps = kwargs.get('target_fps', None)
+        original_fps = kwargs.get('original_fps', 16)
 
         # 数据路径
         frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
@@ -102,7 +118,10 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             model_type=model_type,
             top_n_classes=top_n_classes,
             stratified_split=stratified_split,
-            min_samples_per_class=min_samples_per_class
+            min_samples_per_class=min_samples_per_class,
+            sampling_mode=sampling_mode,
+            target_fps=target_fps,
+            original_fps=original_fps
         )
 
         test_dataset = NeonatalMultilabelDataset(
@@ -113,7 +132,10 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             model_type=model_type,
             top_n_classes=top_n_classes,
             stratified_split=stratified_split,
-            min_samples_per_class=min_samples_per_class
+            min_samples_per_class=min_samples_per_class,
+            sampling_mode=sampling_mode,
+            target_fps=target_fps,
+            original_fps=original_fps
         )
 
         num_classes = train_dataset.get_num_classes()

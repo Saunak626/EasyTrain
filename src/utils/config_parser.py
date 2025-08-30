@@ -185,6 +185,48 @@ def apply_nested_parameter_overrides(config: Dict[str, Any], args: argparse.Name
             set_nested_value(config, arg_name, arg_value)
 
 
+def apply_fps_sampling_overrides(config: Dict[str, Any], args: argparse.Namespace) -> None:
+    """处理FPS采样简化参数
+
+    将--fps和--random_sampling参数转换为相应的配置设置，
+    提供比--override更简洁的FPS采样控制方式。
+
+    Args:
+        config: 完整配置字典
+        args: 解析后的命令行参数
+    """
+    # 确保data.params节点存在
+    if "data" not in config:
+        config["data"] = {}
+    if "params" not in config["data"]:
+        config["data"]["params"] = {}
+
+    data_params = config["data"]["params"]
+
+    # 处理--fps参数
+    if args.fps is not None:
+        if args.fps <= 0:
+            raise ValueError(f"--fps参数必须大于0，当前值: {args.fps}")
+
+        data_params["sampling_mode"] = "fps"
+        data_params["target_fps"] = args.fps
+
+        # 如果没有设置original_fps，使用默认值
+        if "original_fps" not in data_params:
+            data_params["original_fps"] = 16
+
+        print(f"🎯 FPS采样模式已启用: target_fps={args.fps}, original_fps={data_params['original_fps']}")
+
+    # 处理--random_sampling参数
+    elif args.random_sampling:
+        data_params["sampling_mode"] = "random"
+        # 清除可能存在的FPS相关参数
+        data_params.pop("target_fps", None)
+        print(f"🎯 随机采样模式已启用")
+
+    # 如果两个参数都没有指定，保持配置文件中的设置
+
+
 def apply_single_experiment_configs(config: Dict[str, Any], args: argparse.Namespace) -> None:
     """应用单实验模式特有的配置
 
@@ -254,6 +296,11 @@ def create_base_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--exp_name", type=str, help="实验名称")
     parser.add_argument("--data_percentage", type=float, default=None, help="使用数据的百分比 (0.0-1.0)")
     parser.add_argument("--result_file", type=str, help="结果文件路径（用于网格搜索）")
+
+    # === FPS采样简化参数 ===
+    # 简化的FPS采样控制参数，替代复杂的--override方式
+    parser.add_argument("--fps", type=float, default=None, help="启用FPS采样模式并设置目标帧率 (例如: --fps 8)")
+    parser.add_argument("--random_sampling", action="store_true", help="强制使用随机采样模式（覆盖配置文件设置）")
     
     # === 嵌套配置参数 ===
     # 支持点号分隔的深层配置覆盖，实现精确的配置控制
@@ -270,7 +317,14 @@ def create_base_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--loss", type=str, help="损失函数类型")
     parser.add_argument("--loss.name", type=str, help="损失函数名称")
     parser.add_argument("--loss.params.pos_weight", type=float, help="多标签BCE损失的正样本权重")
-    
+
+    # === 数据集参数 ===
+    # 数据集相关的嵌套参数
+    parser.add_argument("--data.params.sampling_mode", type=str, help="采样模式: random 或 fps")
+    parser.add_argument("--data.params.target_fps", type=float, help="目标采样帧率")
+    parser.add_argument("--data.params.original_fps", type=float, help="原始视频帧率")
+    parser.add_argument("--data.params.clip_len", type=int, help="每个视频片段的帧数")
+
     # === 超参数命名空间 ===
     # 使用hp前缀的参数，与配置文件中的hp节点对应
     parser.add_argument("--hp.learning_rate", type=float, help="学习率")
@@ -341,7 +395,10 @@ def apply_parameter_overrides(config: Dict[str, Any], args: argparse.Namespace, 
     # 4. 处理嵌套参数（点号分隔）
     apply_nested_parameter_overrides(config, args)
 
-    # 5. 应用模式特定的配置
+    # 5. 处理FPS采样简化参数
+    apply_fps_sampling_overrides(config, args)
+
+    # 6. 应用模式特定的配置
     if mode == "single_experiment":
         apply_single_experiment_configs(config, args)
 

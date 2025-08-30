@@ -76,11 +76,20 @@ class VideoDataset(BaseVideoDataset):
         clip_len (int): 每个视频片段的帧数
     """
     
-    def __init__(self, dataset_path, images_path, clip_len=16, model_type=None):
+    def __init__(self, dataset_path, images_path, clip_len=16, model_type=None,
+                 sampling_mode='random', target_fps=None, original_fps=16):
         super().__init__(clip_len)
         self.dataset_path = dataset_path  # 数据集的地址
         self.split = images_path  # 训练集，测试集，验证集的名字
         self.model_type = model_type  # 模型类型，用于获取对应的transforms
+
+        # FPS采样相关参数
+        self.sampling_mode = sampling_mode  # 'random' 或 'fps'
+        self.target_fps = target_fps  # 目标采样帧率
+        self.original_fps = original_fps  # 原始视频帧率，默认16fps
+
+        # 参数验证
+        self._validate_sampling_params()
 
         # 获取模型特定的transforms
         self.model_transforms = self._get_model_transforms()
@@ -116,6 +125,81 @@ class VideoDataset(BaseVideoDataset):
             raise ValueError("没有找到有效的训练数据！请检查数据集路径和标签名称。")
 
         self.label_array = np.array(labels, dtype=int)
+
+    def _validate_sampling_params(self):
+        """验证采样参数的有效性"""
+        if self.sampling_mode not in ['random', 'fps']:
+            raise ValueError(f"不支持的采样模式: {self.sampling_mode}。支持的模式: 'random', 'fps'")
+
+        if self.sampling_mode == 'fps':
+            if self.target_fps is None:
+                raise ValueError("使用FPS采样模式时，必须指定target_fps参数")
+            if self.target_fps <= 0:
+                raise ValueError(f"target_fps必须大于0，当前值: {self.target_fps}")
+            if self.original_fps <= 0:
+                raise ValueError(f"original_fps必须大于0，当前值: {self.original_fps}")
+
+    def fps_sampling(self, buffer, clip_len, target_fps, original_fps=16, min_fps=4):
+        """基于FPS的帧采样方法
+
+        Args:
+            buffer (np.ndarray): 输入视频帧缓冲区，形状为(T, H, W, C)
+            clip_len (int): 目标输出帧数
+            target_fps (float): 目标采样帧率
+            original_fps (float): 原始视频帧率，默认16fps
+            min_fps (float): 最低采样帧率限制，默认4fps
+
+        Returns:
+            np.ndarray: 采样后的帧缓冲区，形状为(clip_len, H, W, C)
+        """
+        total_frames = buffer.shape[0]
+
+        # 应用最低FPS限制
+        effective_fps = max(target_fps, min_fps)
+
+        # 计算采样间隔
+        interval = original_fps / effective_fps
+
+        # 生成采样索引
+        indices = []
+        current_idx = 0.0
+
+        while len(indices) < clip_len and int(current_idx) < total_frames:
+            indices.append(int(current_idx))
+            current_idx += interval
+
+        # 如果采样帧数不足，采用密集采样策略
+        if len(indices) < clip_len:
+            # 策略1: 从视频开始位置进行更密集的采样
+            remaining_frames = clip_len - len(indices)
+
+            # 计算更密集的间隔（最小为1帧间隔）
+            dense_interval = max(1.0, total_frames / clip_len)
+
+            # 重新生成索引，使用更密集的采样
+            indices = []
+            current_idx = 0.0
+
+            while len(indices) < clip_len and int(current_idx) < total_frames:
+                indices.append(int(current_idx))
+                current_idx += dense_interval
+
+            # 如果仍然不足，重复关键帧
+            if len(indices) < clip_len:
+                last_frame_idx = indices[-1] if indices else 0
+                while len(indices) < clip_len:
+                    indices.append(last_frame_idx)
+
+        # 如果采样帧数超过clip_len，截断
+        indices = indices[:clip_len]
+
+        # 确保索引不超出范围
+        indices = [min(idx, total_frames - 1) for idx in indices]
+
+        # 采样帧
+        sampled_buffer = buffer[indices]
+
+        return sampled_buffer
 
     def _get_model_transforms(self):
         """获取模型特定的transforms（增强版）"""
@@ -155,17 +239,22 @@ class VideoDataset(BaseVideoDataset):
 
         # 如果有模型特定的transforms，使用官方transforms
         if self.model_transforms is not None:
-            # 简单的时间维度采样，保持原始空间尺寸
-            if buffer.shape[0] > self.clip_len:
-                # 随机选择起始帧
-                start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
-                buffer = buffer[start_idx:start_idx + self.clip_len]
-            elif buffer.shape[0] < self.clip_len:
-                # 重复最后一帧
-                last_frame = buffer[-1]
-                pad_size = self.clip_len - buffer.shape[0]
-                padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
-                buffer = np.concatenate([buffer, padding], axis=0)
+            # 根据采样模式选择采样策略
+            if self.sampling_mode == 'fps' and self.target_fps is not None:
+                # 使用FPS采样
+                buffer = self.fps_sampling(buffer, self.clip_len, self.target_fps, self.original_fps)
+            else:
+                # 使用传统的随机采样（默认模式）
+                if buffer.shape[0] > self.clip_len:
+                    # 随机选择起始帧
+                    start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
+                    buffer = buffer[start_idx:start_idx + self.clip_len]
+                elif buffer.shape[0] < self.clip_len:
+                    # 重复最后一帧
+                    last_frame = buffer[-1]
+                    pad_size = self.clip_len - buffer.shape[0]
+                    padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
+                    buffer = np.concatenate([buffer, padding], axis=0)
 
             # 转换为torch tensor格式: (T, H, W, C) -> (T, C, H, W)
             buffer = torch.from_numpy(buffer).float() / 255.0
@@ -175,9 +264,16 @@ class VideoDataset(BaseVideoDataset):
             buffer = self.model_transforms(buffer)
         else:
             # 使用传统的预处理方式（向后兼容）
-            # 原始视频分辨率约为3:4 (128*171)
-            # 在数据的深度，高度，宽度方向进行随机裁剪，将数据数据转化为（clip_len， 112, 112， 3）
-            buffer = self.crop(buffer, self.clip_len, self.crop_size)
+            # 根据采样模式选择采样策略
+            if self.sampling_mode == 'fps' and self.target_fps is not None:
+                # 使用FPS采样
+                buffer = self.fps_sampling(buffer, self.clip_len, self.target_fps, self.original_fps)
+                # 应用传统的空间裁剪和预处理
+                buffer = self.crop_spatial_only(buffer, self.crop_size)
+            else:
+                # 使用传统的时空裁剪（默认模式）
+                buffer = self.crop(buffer, self.clip_len, self.crop_size)
+
             buffer = self.normalize(buffer)  # 对模型进行归一化处理
             buffer = self.to_tensor(buffer)  # 对维度进行转化
             buffer = torch.from_numpy(buffer)
@@ -228,6 +324,17 @@ class VideoDataset(BaseVideoDataset):
 
         return buffer
 
+    def crop_spatial_only(self, buffer, crop_size):
+        """仅进行空间裁剪，不进行时间维度裁剪（用于FPS采样后的处理）"""
+        height_index = np.random.randint(buffer.shape[1] - crop_size)
+        width_index = np.random.randint(buffer.shape[2] - crop_size)
+
+        buffer = buffer[:,
+                        height_index:height_index + crop_size,
+                        width_index:width_index + crop_size, :]
+
+        return buffer
+
     def normalize(self, buffer):
         """对视频帧进行归一化处理"""
         # 进行归一化
@@ -253,17 +360,23 @@ class VideoDataset(BaseVideoDataset):
 class CombinedVideoDataset(Dataset):
     """合并val和test数据集的包装类"""
     
-    def __init__(self, dataset_path, clip_len, model_type=None):
+    def __init__(self, dataset_path, clip_len, model_type=None,
+                 sampling_mode='random', target_fps=None, original_fps=16):
         """初始化合并数据集
 
         Args:
             dataset_path (str): 数据集根目录路径
             clip_len (int): 每个视频片段的帧数
             model_type (str, optional): 模型类型，用于获取对应的transforms
+            sampling_mode (str): 采样模式，'random'或'fps'
+            target_fps (float, optional): 目标采样帧率
+            original_fps (float): 原始视频帧率
         """
         # 创建val和test数据集
-        self.val_dataset = VideoDataset(dataset_path, 'val', clip_len, model_type)
-        self.test_dataset = VideoDataset(dataset_path, 'test', clip_len, model_type)
+        self.val_dataset = VideoDataset(dataset_path, 'val', clip_len, model_type,
+                                       sampling_mode, target_fps, original_fps)
+        self.test_dataset = VideoDataset(dataset_path, 'test', clip_len, model_type,
+                                        sampling_mode, target_fps, original_fps)
         
         # 计算总长度
         self.val_len = len(self.val_dataset)

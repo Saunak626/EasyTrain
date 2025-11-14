@@ -122,11 +122,20 @@ class MultilabelMetricsCalculator:
             'accuracy': float(np.mean(per_class_accuracy))
         }
         
+        # 🔧 修复：micro_accuracy使用全局accuracy，与micro的precision/recall一致
+        # 原来使用accuracy_score计算的是subset accuracy（所有类别都正确才算正确）
+        # 现在改为全局accuracy（所有预测中正确的比例）
+        micro_accuracy = float((pred_binary == targets_binary).mean())
+
+        # 可选：保留subset accuracy作为额外指标
+        subset_accuracy = float(accuracy_score(targets_binary, pred_binary))
+
         micro_avg = {
             'precision': float(precision_score(targets_binary, pred_binary, average='micro', zero_division=0)),
             'recall': float(recall_score(targets_binary, pred_binary, average='micro', zero_division=0)),
             'f1': float(f1_score(targets_binary, pred_binary, average='micro', zero_division=0)),
-            'accuracy': float(accuracy_score(targets_binary, pred_binary)) # 整体准确率
+            'accuracy': micro_accuracy,  # 全局准确率（与micro的precision/recall一致）
+            'subset_accuracy': subset_accuracy  # 子集准确率（所有类别都正确）
         }
         
         weighted_avg_report = report['weighted avg']

@@ -210,13 +210,15 @@ class MultilabelFocalLoss(nn.Module):
         # 对于负样本：pt = 1 - p
         pt = torch.where(targets == 1, probs, 1 - probs)
 
-        # 计算alpha权重（改进版本，避免与pos_weight冲突）
-        # 在多标签场景中，如果已经使用了pos_weight，alpha权重应该更保守
+        # 🔧 修复：alpha权重逻辑（低优先级修复）
+        # 计算alpha权重
         if pos_weight is not None:
-            # 如果使用了pos_weight，alpha权重应该更平衡，避免双重加权
-            alpha_weight = torch.where(targets == 1, alpha, alpha)  # 正负样本使用相同的alpha
+            # 如果使用了pos_weight，不再使用alpha进行额外的类别平衡
+            # 避免双重加权导致的过度惩罚或奖励
+            alpha_weight = torch.ones_like(targets)
         else:
             # 如果没有使用pos_weight，使用传统的alpha权重分配
+            # 正样本权重为alpha，负样本权重为1-alpha
             alpha_weight = torch.where(targets == 1, alpha, 1 - alpha)
 
         # 计算Focal Loss

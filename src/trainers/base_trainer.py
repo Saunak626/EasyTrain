@@ -624,6 +624,45 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
             loss_config['params'] = {}
         loss_config['params']['num_classes'] = num_classes
 
+        # 🔧 新增：动态计算pos_weight（高优先级修复）
+        # 如果配置中指定了pos_weight但是标量值，则根据训练集统计动态计算
+        config_pos_weight = loss_config.get('params', {}).get('pos_weight', None)
+        if config_pos_weight is not None and isinstance(config_pos_weight, (int, float)):
+            # 从训练集统计每个类别的正负样本比例
+            if accelerator.is_main_process:
+                print(f"📊 检测到pos_weight配置为标量 {config_pos_weight}，开始动态计算每个类别的pos_weight...")
+
+            # 收集所有训练样本的标签
+            all_labels = []
+            for batch_idx, (_, targets) in enumerate(train_dataloader):
+                all_labels.append(targets.cpu())
+                # 只采样部分数据以加快计算（最多1000个batch）
+                if batch_idx >= 1000:
+                    break
+
+            if all_labels:
+                all_labels = torch.cat(all_labels, dim=0)  # (N, num_classes)
+                pos_counts = all_labels.sum(dim=0)  # 每个类别的正样本数
+                total_samples = all_labels.shape[0]
+                neg_counts = total_samples - pos_counts  # 每个类别的负样本数
+
+                # 计算pos_weight = neg_samples / pos_samples
+                # 添加小的epsilon避免除零
+                pos_weight = neg_counts / (pos_counts + 1e-6)
+
+                # 限制pos_weight的范围，避免极端值
+                pos_weight = torch.clamp(pos_weight, min=1.0, max=100.0)
+
+                loss_config['params']['pos_weight'] = pos_weight
+
+                if accelerator.is_main_process:
+                    print(f"✅ 动态计算的pos_weight:")
+                    class_names = dataset.get_class_names() if hasattr(dataset, 'get_class_names') else None
+                    for i in range(num_classes):
+                        class_name = class_names[i] if class_names else f"类别{i}"
+                        print(f"   {class_name}: pos={int(pos_counts[i])}, neg={int(neg_counts[i])}, "
+                              f"pos_weight={pos_weight[i]:.2f}")
+
         # 🔧 调试信息：确认参数传递
         print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
         print(f"   数据集类别数: {dataset.get_num_classes() if hasattr(dataset, 'get_num_classes') else '未知'}")

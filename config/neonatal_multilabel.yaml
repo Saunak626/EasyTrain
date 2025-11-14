@@ -20,7 +20,7 @@ swanlab:
 # 数据集配置
 data:
   type: neonatal_multilabel
-  root: /home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments
+  root: /home/swq/Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments
   num_workers: 12
   params:
     clip_len: 32
@@ -28,6 +28,7 @@ data:
     stratified_split: true
     min_samples_per_class: 10
     sampling_mode: "random"
+    labels_file: /home/swq/Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx
     # target_fps: 8           # 若启用fps模式需要设置
     # original_fps: 16
 
@@ -42,6 +43,11 @@ hp:
   batch_size: 32
   learning_rate: 0.001
   epochs: 10
+
+# GPU配置
+gpu:
+  device_ids: "0"
+  auto_select: true
 
 # 优化器配置
 optimizer:

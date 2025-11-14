@@ -106,9 +106,35 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         target_fps = kwargs.get('target_fps', None)
         original_fps = kwargs.get('original_fps', 16)
 
-        # 数据路径
-        frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
-        labels_file = "/home/swq/Code/Neonate-Feeding-Assessment/result_xlsx/latest/multi_hot_labels.xlsx"
+        # 数据路径：优先使用config中的root/params，未提供时回退到默认路径（相对路径）
+        import os
+        # 获取项目根目录（假设dataloader_factory.py在src/datasets/下）
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        default_frames = os.path.join(project_root, "../Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments")
+        default_labels = os.path.join(project_root, "../Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx")
+
+        # 如果data_dir是相对路径，则相对于项目根目录解析
+        if data_dir:
+            if not os.path.isabs(data_dir):
+                frames_dir = os.path.join(project_root, data_dir)
+            else:
+                frames_dir = data_dir
+        else:
+            frames_dir = default_frames
+
+        # 标签文件路径处理
+        labels_file_param = (
+            kwargs.get('labels_file') or
+            kwargs.get('label_file') or
+            kwargs.get('labels_path')
+        )
+        if labels_file_param:
+            if not os.path.isabs(labels_file_param):
+                labels_file = os.path.join(project_root, labels_file_param)
+            else:
+                labels_file = labels_file_param
+        else:
+            labels_file = default_labels
 
         train_dataset = NeonatalMultilabelDataset(
             frames_dir=frames_dir,
@@ -166,6 +192,28 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
     # else:
         # if is_main_process():
         #     print(f"📊 使用完整数据集 - 训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} 样本")
+
+    # 检查数据集是否为空
+    train_size = len(train_dataset)
+    test_size = len(test_dataset)
+
+    if train_size == 0:
+        raise ValueError(
+            f"训练集为空！请检查以下可能的原因:\n"
+            f"  1. data_percentage参数设置过小 (当前: {data_percentage:.1%})\n"
+            f"  2. 数据集路径不正确: {data_dir}\n"
+            f"  3. 数据过滤条件过于严格\n"
+            f"  建议: 增大data_percentage或检查数据集配置"
+        )
+
+    if test_size == 0:
+        raise ValueError(
+            f"测试集为空！请检查以下可能的原因:\n"
+            f"  1. data_percentage参数设置过小 (当前: {data_percentage:.1%})\n"
+            f"  2. 数据集路径不正确: {data_dir}\n"
+            f"  3. 数据划分比例不合理\n"
+            f"  建议: 增大data_percentage或检查数据集配置"
+        )
 
     # 创建数据加载器
     train_loader = DataLoader(

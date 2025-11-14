@@ -20,13 +20,15 @@ swanlab:
 # 数据配置
 data:
   type: neonatal_multilabel  # 使用新的新生儿多标签数据集类型
-  root: /home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments  # 数据集根目录
+  root: ../Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments  # 数据集根目录（相对路径）
   num_workers: 12       # 减少工作进程数，避免CPU和内存过载
   params:
     clip_len: 32      # 每个视频片段的帧数
-    top_n_classes: 10  # 只使用样本数量前7多的类别，减少稀有类别干扰
+    top_n_classes: 10  # 只使用样本数量前10多的类别，减少稀有类别干扰
     stratified_split: true  # 启用分层抽样，确保训练测试集类别分布一致
     min_samples_per_class: 10  # 类别最小样本数阈值
+    # 标签文件路径（相对路径）
+    labels_file: ../Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx
 
 # # 模型配置（仅保留必要的基础参数）
 # model:

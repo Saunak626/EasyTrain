@@ -983,26 +983,37 @@ def apply_param_overrides(config, params):
 def run_single_experiment_in_process(params, exp_id, config_path):
     """进程内调用方式运行单个实验（单卡训练）"""
     exp_name = f"grid_{exp_id}"
-    
+
     try:
-        # 导入训练函数
+        # 导入训练函数和GPU配置函数
         from src.trainers.base_trainer import run_training
-        
+        from src.utils.config_parser import setup_gpu_config
+
         # 加载基础配置
         config = load_grid_config(config_path)
-        
+
         # 应用参数覆盖
         config = apply_param_overrides(config, params)
-        
+
+        # 配置GPU环境（重要：必须在训练前设置）
+        setup_gpu_config(config)
+
         # 直接调用训练函数
         result = run_training(config, exp_name)
-        
+
         # 添加参数信息到结果中
         result["params"] = params
-        
+
         return result
-        
+
     except Exception as e:
+        import traceback
+        print(f"❌ 实验 {exp_name} 发生异常:")
+        print(f"   错误类型: {type(e).__name__}")
+        print(f"   错误信息: {str(e)}")
+        print(f"   完整堆栈:")
+        traceback.print_exc()
+
         return {
             "success": False,
             "exp_name": exp_name,
@@ -1010,7 +1021,8 @@ def run_single_experiment_in_process(params, exp_id, config_path):
             "best_accuracy": 0.0,
             "final_accuracy": 0.0,
             "trained_epochs": 0,
-            "error": str(e)
+            "error": str(e),
+            "error_type": type(e).__name__
         }
 
 
@@ -1220,7 +1232,9 @@ def run_grid_search(args):
 
         # 将命令行参数添加到实验参数中
         experiment_params = params.copy()
-        # 始终添加data_percentage参数，确保CSV记录完整
+        # 始终添加data_percentage参数到hp命名空间，确保CSV记录完整
+        experiment_params['hp.data_percentage'] = data_percentage
+        # 同时添加到根级别用于CSV记录
         experiment_params['data_percentage'] = data_percentage
 
         result = run_single_experiment(

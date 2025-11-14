@@ -163,7 +163,7 @@ def print_learning_rate_info(lr_info, epoch, total_epochs, phase="开始"):
 
 
 def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch,
-                metrics_calculator=None):
+                metrics_calculator=None, scheduler_step_interval='batch'):
     """执行单个训练轮次
 
     Args:
@@ -184,8 +184,8 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     num_batches = 0
 
     # 🔧 新增：收集训练数据用于指标计算
-    all_predictions = []
-    all_targets = []
+    collected_outputs = []
+    collected_targets = []
     is_multilabel = metrics_calculator is not None
 
     # 使用统一的进度条管理器
@@ -199,24 +199,16 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         accelerator.backward(loss)
         optimizer.step()
         optimizer.zero_grad()
-        lr_scheduler.step()
+        if lr_scheduler is not None and scheduler_step_interval == 'batch':
+            lr_scheduler.step()
 
         total_loss += loss.item()
         num_batches += 1
 
         # 🔧 新增：收集预测和目标数据（用于训练集指标计算）
         if is_multilabel:
-            # 收集预测概率和目标标签
-            gathered_outputs = accelerator.gather(outputs)
-            gathered_targets = accelerator.gather(targets)
-
-            if accelerator.is_main_process:
-                # 🔧 修复：应用sigmoid获取概率，并正确处理梯度
-                probs = torch.sigmoid(gathered_outputs).detach().cpu().numpy()
-                targets_np = gathered_targets.detach().cpu().numpy()
-
-                all_predictions.append(probs)
-                all_targets.append(targets_np)
+            collected_outputs.append(outputs.detach())
+            collected_targets.append(targets.detach())
 
         accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
@@ -239,43 +231,51 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     # 计算平均训练损失
     avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
+    if lr_scheduler is not None and scheduler_step_interval == 'epoch':
+        lr_scheduler.step()
+
     # 🔧 新增：计算训练集指标（如果是多标签任务）
     train_accuracy = 0.0
-    if is_multilabel and all_predictions and accelerator.is_main_process:
-        # 合并所有批次的预测和目标
-        all_pred_array = np.concatenate(all_predictions, axis=0)
-        all_target_array = np.concatenate(all_targets, axis=0)
+    if is_multilabel and collected_outputs:
+        stacked_outputs = torch.cat(collected_outputs, dim=0)
+        stacked_targets = torch.cat(collected_targets, dim=0)
 
-        # 计算训练集详细指标
-        train_metrics = metrics_calculator.calculate_detailed_metrics(
-            all_pred_array, all_target_array, threshold=0.5
-        )
+        gathered_outputs = accelerator.gather_for_metrics(stacked_outputs)
+        gathered_targets = accelerator.gather_for_metrics(stacked_targets)
 
-        # 保存训练集指标到单独的CSV文件
-        metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
+        if accelerator.is_main_process:
+            probs = torch.sigmoid(gathered_outputs).cpu().numpy()
+            targets_np = gathered_targets.cpu().numpy()
 
-        # 记录训练集指标到SwanLab
-        accelerator.log({
-            "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
-            "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
-            "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
-            "train/macro_f1": train_metrics['macro_avg']['f1'],
-            "train/micro_f1": train_metrics['micro_avg']['f1'],
-            "train/weighted_f1": train_metrics['weighted_avg']['f1'],
-            "train/macro_precision": train_metrics['macro_avg']['precision'],
-            "train/macro_recall": train_metrics['macro_avg']['recall']
-        }, step=epoch)
+            # 计算训练集详细指标
+            train_metrics = metrics_calculator.calculate_detailed_metrics(
+                probs, targets_np, threshold=0.5
+            )
 
-        # 🔧 新增：记录每个类别的训练指标到SwanLab
-        for class_name, class_metrics in train_metrics['class_metrics'].items():
+            # 保存训练集指标到单独的CSV文件
+            metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
+
+            # 记录训练集指标到SwanLab
             accelerator.log({
-                f"train_class/{class_name}/f1": class_metrics['f1'],
-                f"train_class/{class_name}/precision": class_metrics['precision'],
-                f"train_class/{class_name}/recall": class_metrics['recall'],
-                f"train_class/{class_name}/accuracy": class_metrics['accuracy']
+                "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
+                "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
+                "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
+                "train/macro_f1": train_metrics['macro_avg']['f1'],
+                "train/micro_f1": train_metrics['micro_avg']['f1'],
+                "train/weighted_f1": train_metrics['weighted_avg']['f1'],
+                "train/macro_precision": train_metrics['macro_avg']['precision'],
+                "train/macro_recall": train_metrics['macro_avg']['recall']
             }, step=epoch)
 
-        train_accuracy = train_metrics['macro_avg']['accuracy']
+            for class_name, class_metrics in train_metrics['class_metrics'].items():
+                accelerator.log({
+                    f"train_class/{class_name}/f1": class_metrics['f1'],
+                    f"train_class/{class_name}/precision": class_metrics['precision'],
+                    f"train_class/{class_name}/recall": class_metrics['recall'],
+                    f"train_class/{class_name}/accuracy": class_metrics['accuracy']
+                }, step=epoch)
+
+            train_accuracy = train_metrics['macro_avg']['accuracy']
 
     return avg_train_loss, train_accuracy
 
@@ -607,8 +607,15 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     loss_name = loss_config.get('name') or loss_config.get('type')
     if loss_name in multilabel_loss_types:
         # 从数据集获取实际的类别数量
-        if hasattr(train_dataloader.dataset, 'get_num_classes'):
-            num_classes = train_dataloader.dataset.get_num_classes()
+        # 处理Subset包装的情况（当使用data_percentage时）
+        from torch.utils.data import Subset
+        dataset = train_dataloader.dataset
+        if isinstance(dataset, Subset):
+            # 如果是Subset，获取原始数据集
+            dataset = dataset.dataset
+
+        if hasattr(dataset, 'get_num_classes'):
+            num_classes = dataset.get_num_classes()
         else:
             # 从模型配置获取类别数量（向后兼容）
             num_classes = config.get('model', {}).get('params', {}).get('num_classes', 24)
@@ -619,8 +626,8 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
 
         # 🔧 调试信息：确认参数传递
         print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
-        print(f"   数据集类别数: {train_dataloader.dataset.get_num_classes() if hasattr(train_dataloader.dataset, 'get_num_classes') else '未知'}")
-        print(f"   数据集类别名: {train_dataloader.dataset.get_class_names() if hasattr(train_dataloader.dataset, 'get_class_names') else '未知'}")
+        print(f"   数据集类别数: {dataset.get_num_classes() if hasattr(dataset, 'get_num_classes') else '未知'}")
+        print(f"   数据集类别名: {dataset.get_class_names() if hasattr(dataset, 'get_class_names') else '未知'}")
 
     loss_fn = get_loss_function(loss_config)
 
@@ -635,7 +642,12 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
 
     lr_scheduler = get_scheduler(optimizer, scheduler_config, hyperparams)
 
-    return loss_fn, optimizer, lr_scheduler
+    scheduler_name = (scheduler_config.get('name') or scheduler_config.get('type') or '').lower()
+    scheduler_step_interval = scheduler_config.get('step_interval')
+    if scheduler_step_interval is None:
+        scheduler_step_interval = 'batch' if scheduler_name in ['onecycle'] else 'epoch'
+
+    return loss_fn, optimizer, lr_scheduler, scheduler_step_interval
 
 
 def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
@@ -739,7 +751,8 @@ def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict
 
 
 def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, loss_fn,
-                     train_dataloader, test_dataloader, accelerator: Accelerator, metrics_calculator=None) -> Tuple[float, float, int]:
+                     train_dataloader, test_dataloader, accelerator: Accelerator, metrics_calculator=None,
+                     scheduler_step_interval='batch') -> Tuple[float, float, int]:
     """主训练循环
 
     负责执行完整的训练循环，包括训练和测试阶段。
@@ -777,7 +790,17 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
             print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
 
         # 训练epoch（传递metrics_calculator用于训练集指标计算）
-        train_loss, train_accuracy = train_epoch(train_dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch, metrics_calculator)
+        train_loss, train_accuracy = train_epoch(
+            train_dataloader,
+            model,
+            loss_fn,
+            optimizer,
+            lr_scheduler,
+            accelerator,
+            epoch,
+            metrics_calculator,
+            scheduler_step_interval
+        )
         # 测试epoch
         _, val_accuracy = test_epoch(test_dataloader, model, loss_fn, accelerator, epoch,
                                    train_batches=len(train_dataloader),
@@ -848,40 +871,52 @@ def cleanup_and_return(accelerator: Accelerator, exp_name: str, best_accuracy: f
     if metrics_calculator is not None:
         best_metrics = metrics_calculator.best_metrics
 
-        # 获取最新的指标（最后一次评估的结果）
-        latest_metrics = None
-        if metrics_calculator.metrics_history:
-            latest_metrics = metrics_calculator.metrics_history[-1]
+        # 检查是否有有效的指标数据（通过检查macro_avg是否为空字典）
+        has_valid_metrics = (
+            best_metrics.get("macro_avg") and
+            isinstance(best_metrics.get("macro_avg"), dict) and
+            len(best_metrics.get("macro_avg", {})) > 0
+        )
 
-        multilabel_metrics = {
-            "best": {
-                "macro_accuracy": best_metrics.get("macro_avg", {}).get("accuracy"),
-                "micro_accuracy": best_metrics.get("micro_avg", {}).get("accuracy"),
-                "weighted_accuracy": best_metrics.get("weighted_avg", {}).get("accuracy"),
-                "macro_f1": best_metrics.get("macro_avg_f1"),
-                "micro_f1": best_metrics.get("micro_avg", {}).get("f1"),
-                "weighted_f1": best_metrics.get("weighted_avg", {}).get("f1"),
-                "macro_precision": best_metrics.get("macro_avg", {}).get("precision"),
-                "macro_recall": best_metrics.get("macro_avg", {}).get("recall"),
-                "epoch": best_metrics.get("epoch")
-            }
-        }
+        if has_valid_metrics:
+            # 获取最新的指标（最后一次评估的结果）
+            latest_metrics = None
+            if metrics_calculator.metrics_history:
+                latest_metrics = metrics_calculator.metrics_history[-1]
 
-        # 添加最终指标
-        if latest_metrics:
-            multilabel_metrics["final"] = {
-                "macro_accuracy": latest_metrics.get("macro_avg", {}).get("accuracy"),
-                "micro_accuracy": latest_metrics.get("micro_avg", {}).get("accuracy"),
-                "weighted_accuracy": latest_metrics.get("weighted_avg", {}).get("accuracy"),
-                "macro_f1": latest_metrics.get("macro_avg", {}).get("f1"),
-                "micro_f1": latest_metrics.get("micro_avg", {}).get("f1"),
-                "weighted_f1": latest_metrics.get("weighted_avg", {}).get("f1"),
+            multilabel_metrics = {
+                "best": {
+                    "macro_accuracy": best_metrics.get("macro_avg", {}).get("accuracy"),
+                    "micro_accuracy": best_metrics.get("micro_avg", {}).get("accuracy"),
+                    "weighted_accuracy": best_metrics.get("weighted_avg", {}).get("accuracy"),
+                    "macro_f1": best_metrics.get("macro_avg_f1"),
+                    "micro_f1": best_metrics.get("micro_avg", {}).get("f1"),
+                    "weighted_f1": best_metrics.get("weighted_avg", {}).get("f1"),
+                    "macro_precision": best_metrics.get("macro_avg", {}).get("precision"),
+                    "macro_recall": best_metrics.get("macro_avg", {}).get("recall"),
+                    "epoch": best_metrics.get("epoch")
+                }
             }
 
-        result["multilabel_metrics"] = multilabel_metrics
+            # 添加最终指标
+            if latest_metrics:
+                multilabel_metrics["final"] = {
+                    "macro_accuracy": latest_metrics.get("macro_avg", {}).get("accuracy"),
+                    "micro_accuracy": latest_metrics.get("micro_avg", {}).get("accuracy"),
+                    "weighted_accuracy": latest_metrics.get("weighted_avg", {}).get("accuracy"),
+                    "macro_f1": latest_metrics.get("macro_avg", {}).get("f1"),
+                    "micro_f1": latest_metrics.get("micro_avg", {}).get("f1"),
+                    "weighted_f1": latest_metrics.get("weighted_avg", {}).get("f1"),
+                }
 
-        # 为网格搜索详情表添加完整的详细指标
-        result["detailed_metrics"] = best_metrics
+            result["multilabel_metrics"] = multilabel_metrics
+
+            # 为网格搜索详情表添加完整的详细指标
+            result["detailed_metrics"] = best_metrics
+        else:
+            # 没有有效指标数据时的警告
+            if accelerator.is_main_process:
+                tqdm.write("⚠️ 多标签指标计算器未收集到有效数据，可能是训练未正常执行或数据集为空")
 
     return result
 
@@ -910,7 +945,7 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
     train_dataloader, test_dataloader, model, dataset_info = setup_data_and_model(config, task_info, data_config, accelerator)
 
     # 第3步：训练组件初始化
-    loss_fn, optimizer, lr_scheduler = setup_training_components(config, model, train_dataloader, accelerator)
+    loss_fn, optimizer, lr_scheduler, scheduler_step_interval = setup_training_components(config, model, train_dataloader, accelerator)
 
     # 清理GPU缓存，释放未使用的内存
     if torch.cuda.is_available():
@@ -956,7 +991,7 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
 
     # 第6步：执行训练循环
     best_accuracy, val_accuracy, trained_epochs = run_training_loop(
-        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator, metrics_calculator
+        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator, metrics_calculator, scheduler_step_interval
     )
 
     # 第7步：清理和返回结果

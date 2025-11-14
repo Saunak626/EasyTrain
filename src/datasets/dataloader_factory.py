@@ -5,7 +5,9 @@
 
 import os
 import torch
-from torch.utils.data import DataLoader, Subset
+import numpy as np
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from collections import Counter
 from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
@@ -15,6 +17,149 @@ from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
 def is_main_process():
     """检查是否为主进程（用于避免重复输出）"""
     return int(os.environ.get("LOCAL_RANK", 0)) == 0
+
+
+def calculate_sample_weights(dataset, mode='inverse_frequency', verbose=True):
+    """为多标签数据集计算样本权重
+
+    Args:
+        dataset: 数据集对象（支持Subset包装）
+        mode (str): 权重计算模式
+            - 'inverse_frequency': 基于类别逆频率的权重
+            - 'label_combination': 基于标签组合稀有性的权重
+        verbose (bool): 是否打印详细信息
+
+    Returns:
+        torch.Tensor: 每个样本的权重向量
+    """
+    # 处理Subset包装的情况
+    actual_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
+    indices = dataset.indices if isinstance(dataset, Subset) else range(len(dataset))
+
+    # 检查数据集是否支持多标签
+    if not hasattr(actual_dataset, 'get_num_classes'):
+        raise ValueError("数据集不支持多标签权重计算")
+
+    num_classes = actual_dataset.get_num_classes()
+    class_names = actual_dataset.get_class_names() if hasattr(actual_dataset, 'get_class_names') else None
+
+    # 🔧 优化：直接从数据集的samples属性读取标签，避免加载图像数据
+    # 收集所有标签
+    all_labels = []
+
+    # 检查数据集是否有samples属性（NeonatalMultilabelDataset有）
+    if hasattr(actual_dataset, 'samples'):
+        # 直接从samples读取标签，避免加载图像
+        for idx in indices:
+            sample = actual_dataset.samples[idx]
+            labels = sample['labels']
+            if isinstance(labels, torch.Tensor):
+                labels = labels.numpy()
+            all_labels.append(labels)
+    else:
+        # 降级方案：通过__getitem__获取标签（会加载图像，较慢）
+        if verbose and is_main_process():
+            print(f"   ⚠️  数据集没有samples属性，使用__getitem__方法（较慢）...")
+        for idx in indices:
+            _, labels = actual_dataset[idx]
+            if isinstance(labels, torch.Tensor):
+                labels = labels.numpy()
+            all_labels.append(labels)
+
+    all_labels = np.array(all_labels)  # (n_samples, n_classes)
+
+    if mode == 'inverse_frequency':
+        # 🔧 模式1: 基于类别逆频率的权重
+        # 统计每个类别的正样本数
+        class_counts = all_labels.sum(axis=0)  # (n_classes,)
+
+        # 计算每个类别的逆频率权重
+        # 使用平滑因子避免除零和极端值
+        class_weights = 1.0 / (class_counts + 1.0)
+        class_weights = class_weights / class_weights.sum() * num_classes  # 归一化
+
+        # 计算每个样本的权重（所有正标签权重的平均）
+        sample_weights = []
+        for labels in all_labels:
+            if labels.sum() > 0:
+                # 样本权重 = 其所有正标签权重的平均值
+                weight = (class_weights * labels).sum() / labels.sum()
+            else:
+                # 无标签样本使用平均权重
+                weight = 1.0
+            sample_weights.append(weight)
+
+        sample_weights = np.array(sample_weights)
+
+        if verbose and is_main_process():
+            print(f"\n📊 加权采样统计 (模式: {mode}):")
+            print(f"   类别权重:")
+            for i in range(num_classes):
+                class_name = class_names[i] if class_names else f"类别{i}"
+                print(f"     {class_name}: 样本数={int(class_counts[i])}, 权重={class_weights[i]:.4f}")
+
+    elif mode == 'label_combination':
+        # 🔧 模式2: 基于标签组合稀有性的权重
+        # 将每个标签组合转换为字符串作为键
+        label_combinations = Counter()
+        label_to_indices = {}
+
+        for idx, labels in enumerate(all_labels):
+            label_key = tuple(labels)
+            label_combinations[label_key] += 1
+            if label_key not in label_to_indices:
+                label_to_indices[label_key] = []
+            label_to_indices[label_key].append(idx)
+
+        # 计算每个标签组合的权重（逆频率）
+        total_samples = len(all_labels)
+        combination_weights = {
+            label_key: total_samples / count
+            for label_key, count in label_combinations.items()
+        }
+
+        # 归一化权重
+        max_weight = max(combination_weights.values())
+        combination_weights = {
+            label_key: weight / max_weight
+            for label_key, weight in combination_weights.items()
+        }
+
+        # 为每个样本分配权重
+        sample_weights = np.array([
+            combination_weights[tuple(labels)]
+            for labels in all_labels
+        ])
+
+        if verbose and is_main_process():
+            print(f"\n📊 加权采样统计 (模式: {mode}):")
+            print(f"   标签组合数量: {len(label_combinations)}")
+            print(f"   前10个最稀有的标签组合:")
+            sorted_combinations = sorted(
+                label_combinations.items(),
+                key=lambda x: x[1]
+            )[:10]
+            for label_key, count in sorted_combinations:
+                label_str = ','.join([
+                    class_names[i] if class_names else str(i)
+                    for i, val in enumerate(label_key) if val > 0
+                ])
+                weight = combination_weights[label_key]
+                print(f"     [{label_str}]: 样本数={count}, 权重={weight:.4f}")
+
+    else:
+        raise ValueError(f"不支持的权重计算模式: {mode}")
+
+    # 输出权重统计
+    if verbose and is_main_process():
+        print(f"   样本权重统计:")
+        print(f"     最小值: {sample_weights.min():.4f}")
+        print(f"     最大值: {sample_weights.max():.4f}")
+        print(f"     平均值: {sample_weights.mean():.4f}")
+        print(f"     中位数: {np.median(sample_weights):.4f}")
+        print(f"     标准差: {sample_weights.std():.4f}")
+
+    return torch.from_numpy(sample_weights).float()
 
 
 def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_type=None, **kwargs):
@@ -215,11 +360,51 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             f"  建议: 增大data_percentage或检查数据集配置"
         )
 
+    # 🔧 新增：支持加权随机采样（仅用于多标签数据集的训练集）
+    use_weighted_sampling = kwargs.get('use_weighted_sampling', False)
+    weighted_sampling_mode = kwargs.get('weighted_sampling_mode', 'inverse_frequency')
+
+    train_sampler = None
+    train_shuffle = True
+
+    if use_weighted_sampling and dataset_name == "neonatal_multilabel":
+        if is_main_process():
+            print(f"\n🎯 启用加权随机采样 (模式: {weighted_sampling_mode})")
+
+        try:
+            # 计算样本权重
+            sample_weights = calculate_sample_weights(
+                train_dataset,
+                mode=weighted_sampling_mode,
+                verbose=True
+            )
+
+            # 创建加权采样器
+            train_sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True  # 允许重复采样
+            )
+
+            # 使用sampler时不能同时使用shuffle
+            train_shuffle = False
+
+            if is_main_process():
+                print(f"✅ 加权采样器创建成功")
+
+        except Exception as e:
+            if is_main_process():
+                print(f"⚠️  加权采样器创建失败: {e}")
+                print(f"   回退到普通随机采样")
+            train_sampler = None
+            train_shuffle = True
+
     # 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=train_shuffle,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=True
     )

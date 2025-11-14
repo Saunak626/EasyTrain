@@ -20,6 +20,17 @@ from .label_cache import LabelCache, OptimizedLabelProcessor
 
 logger = logging.getLogger(__name__)
 
+# 尝试导入iterative-stratification库（用于真正的多标签分层抽样）
+try:
+    from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+    ITERSTRAT_AVAILABLE = True
+except ImportError:
+    ITERSTRAT_AVAILABLE = False
+    logger.warning(
+        "未安装iterative-stratification库，将使用简化的分层抽样策略。\n"
+        "建议安装以获得更好的多标签分层效果: pip install iterative-stratification"
+    )
+
 
 class NeonatalMultilabelDataset(Dataset):
     """新生儿多标签行为识别数据集
@@ -378,7 +389,18 @@ class NeonatalMultilabelDataset(Dataset):
         return updated_samples
     
     def _split_data(self, samples, split):
-        """数据分割（支持分层抽样）"""
+        """数据分割（支持真正的多标签分层抽样）
+
+        使用iterative stratification算法确保每个类别在训练集和测试集中的分布比例一致。
+        如果iterative-stratification库未安装，回退到简化的分层策略。
+
+        Args:
+            samples (list): 所有样本数据
+            split (str): 'train' 或 'test'
+
+        Returns:
+            list: 划分后的样本数据
+        """
         if len(samples) <= 2:
             return samples
 
@@ -390,10 +412,46 @@ class NeonatalMultilabelDataset(Dataset):
             else:
                 return samples[split_idx:]
 
-        # 使用分层抽样确保每个类别在训练集和测试集中都有代表
+        # 🔧 新增：使用真正的多标签分层抽样（Iterative Stratification）
+        if ITERSTRAT_AVAILABLE:
+            try:
+                # 构建多标签矩阵 (n_samples, n_classes)
+                y = np.array([sample['labels'] for sample in samples])
+
+                # 检查是否有足够的样本进行分层
+                if len(samples) < 10:
+                    logger.warning(f"样本数量太少({len(samples)})，回退到简单分割")
+                    split_idx = max(1, int(len(samples) * 0.8))
+                    return samples[:split_idx] if split == 'train' else samples[split_idx:]
+
+                # 使用MultilabelStratifiedShuffleSplit进行分层分割
+                msss = MultilabelStratifiedShuffleSplit(
+                    n_splits=1,
+                    test_size=0.2,
+                    random_state=42
+                )
+
+                # 执行分层分割
+                for train_indices, test_indices in msss.split(X=np.zeros(len(samples)), y=y):
+                    if split == 'train':
+                        result_samples = [samples[i] for i in train_indices]
+                    else:
+                        result_samples = [samples[i] for i in test_indices]
+
+                    # 验证分层效果
+                    self._validate_stratified_split(samples, train_indices, test_indices,
+                                                    method="Iterative Stratification")
+
+                    return result_samples
+
+            except Exception as e:
+                logger.warning(f"Iterative Stratification失败: {e}，回退到简化分层策略")
+                # 继续执行下面的简化分层策略
+
+        # 🔧 降级方案：使用简化的分层抽样（只考虑第一个正标签）
         try:
-            # 为每个样本创建多标签的分层标识
-            # 使用样本的主要类别（最多正标签的类别）作为分层依据
+            # 为每个样本创建分层标识
+            # 使用样本的第一个正标签作为分层依据
             stratify_labels = []
             for sample in samples:
                 labels = sample['labels']
@@ -431,7 +489,8 @@ class NeonatalMultilabelDataset(Dataset):
                 result_samples = [samples[i] for i in test_indices]
 
             # 验证分层效果
-            self._validate_stratified_split(samples, train_indices, test_indices)
+            self._validate_stratified_split(samples, train_indices, test_indices,
+                                           method="Simplified Stratification (first label)")
 
             return result_samples
 
@@ -444,8 +503,15 @@ class NeonatalMultilabelDataset(Dataset):
             else:
                 return samples[split_idx:]
 
-    def _validate_stratified_split(self, samples, train_indices, test_indices):
-        """验证分层分割的效果"""
+    def _validate_stratified_split(self, samples, train_indices, test_indices, method="Stratification"):
+        """验证分层分割的效果
+
+        Args:
+            samples (list): 所有样本数据
+            train_indices (list): 训练集索引
+            test_indices (list): 测试集索引
+            method (str): 分层方法名称，用于日志输出
+        """
         train_class_counts = Counter()
         test_class_counts = Counter()
 
@@ -463,8 +529,16 @@ class NeonatalMultilabelDataset(Dataset):
                 if label_value > 0:
                     test_class_counts[i] += 1
 
+        # 🔧 新增：计算分布差异的统计指标
+        ratios_diff = []
+
         # 计算分布差异
-        logger.info("分层分割验证结果:")
+        logger.info(f"📊 {method} 验证结果:")
+        logger.info(f"   训练集样本数: {len(train_indices)}, 测试集样本数: {len(test_indices)}")
+        logger.info(f"   划分比例: {len(train_indices)/(len(train_indices)+len(test_indices)):.1%} / "
+                   f"{len(test_indices)/(len(train_indices)+len(test_indices)):.1%}")
+        logger.info("   各类别分布:")
+
         for i, class_name in enumerate(self.behavior_labels):
             train_count = train_class_counts.get(i, 0)
             test_count = test_class_counts.get(i, 0)
@@ -473,9 +547,24 @@ class NeonatalMultilabelDataset(Dataset):
             if total_count > 0:
                 train_ratio = train_count / total_count
                 test_ratio = test_count / total_count
-                logger.info(f"  {class_name}: 训练集{train_count}({train_ratio:.1%}) 测试集{test_count}({test_ratio:.1%})")
+                ratio_diff = abs(train_ratio - 0.8)  # 理想情况下训练集应该占80%
+                ratios_diff.append(ratio_diff)
+                logger.info(f"     {class_name}: 训练集{train_count}({train_ratio:.1%}) "
+                           f"测试集{test_count}({test_ratio:.1%}) [偏差:{ratio_diff:.1%}]")
             else:
-                logger.info(f"  {class_name}: 无样本")
+                logger.info(f"     {class_name}: 无样本")
+
+        # 🔧 新增：输出分层质量评估
+        if ratios_diff:
+            avg_diff = np.mean(ratios_diff)
+            max_diff = np.max(ratios_diff)
+            logger.info(f"   分层质量: 平均偏差={avg_diff:.2%}, 最大偏差={max_diff:.2%}")
+            if max_diff < 0.05:
+                logger.info(f"   ✅ 分层效果优秀 (最大偏差 < 5%)")
+            elif max_diff < 0.10:
+                logger.info(f"   ✅ 分层效果良好 (最大偏差 < 10%)")
+            else:
+                logger.info(f"   ⚠️  分层效果一般 (最大偏差 >= 10%)")
     
     def set_model_type(self, model_type):
         """设置模型类型并更新transforms（用于网格搜索）"""

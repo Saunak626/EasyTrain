@@ -23,12 +23,19 @@ data:
   root: ../Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments  # 数据集根目录（相对路径）
   num_workers: 12       # 减少工作进程数，避免CPU和内存过载
   params:
-    clip_len: 32      # 每个视频片段的帧数
+    clip_len: 16      # 每个视频片段的帧数
     top_n_classes: 10  # 只使用样本数量前10多的类别，减少稀有类别干扰
     stratified_split: true  # 启用分层抽样，确保训练测试集类别分布一致
     min_samples_per_class: 10  # 类别最小样本数阈值
     # 标签文件路径（相对路径）
     labels_file: ../Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx
+
+    # 🔧 新增：加权采样配置（用于处理类别不平衡）
+    use_weighted_sampling: true  # 🔧 启用加权随机采样，提高稀有类别的采样频率
+    weighted_sampling_mode: "inverse_frequency"  # 权重计算模式
+    # 可选模式：
+    #   - "inverse_frequency": 基于类别逆频率的权重（推荐）
+    #   - "label_combination": 基于标签组合稀有性的权重
 
 # # 模型配置（仅保留必要的基础参数）
 # model:
@@ -41,7 +48,7 @@ hp:
 
 # GPU配置
 gpu:
-  device_ids: "2,3"
+  device_ids: "0" # "2,3"
   auto_select: true
 
 # 多卡训练配置
@@ -84,7 +91,7 @@ grid_search:
     # - "exponential": 指数衰减，参数：gamma
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
-      hp.batch_size: [32]  # 使用更大的batch_size，128优先
+      hp.batch_size: [48]  # 使用更大的batch_size，128优先
       hp.learning_rate: [0.001]  # 提高学习率，加快收敛
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.01]
@@ -95,7 +102,8 @@ grid_search:
       scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
       scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
       loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
-      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
+      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡（会被动态计算覆盖）
+      loss.params.gamma: [1.0]  # 🔧 Focal Loss的gamma参数，降低到1.0避免过度聚焦
       
     # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     transformer_models:

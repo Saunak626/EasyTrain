@@ -145,7 +145,17 @@ class MultilabelFocalLoss(nn.Module):
         >>> loss_fn = MultilabelFocalLoss(alpha=alpha, gamma=2.0, pos_weight=pos_weight)
     """
 
-    def __init__(self, alpha=1.0, gamma=2.0, pos_weight=None, reduction='mean'):
+    def __init__(self, alpha=1.0, gamma=1.0, pos_weight=None, reduction='mean'):
+        """
+        🔧 优化: 降低gamma默认值从2.0到1.0
+
+        原因: gamma=2.0对于极度不平衡的数据集过于激进，会导致:
+        1. 过度降低易分类样本(通常是负样本)的权重
+        2. 模型过度关注难分类样本
+        3. 结合高pos_weight时，导致模型过度预测正类
+
+        gamma=1.0提供更温和的聚焦效果，适合极度不平衡的多标签分类
+        """
         super(MultilabelFocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -378,7 +388,7 @@ def get_loss_function(loss_config=None, loss_name=None, **kwargs):
 
         return MultilabelFocalLoss(
             alpha=alpha,
-            gamma=params.get('gamma', 2.0),
+            gamma=params.get('gamma', 1.0),  # 🔧 降低默认gamma从2.0到1.0
             pos_weight=pos_weight,
             reduction=params.get('reduction', 'mean')
         )

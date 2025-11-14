@@ -632,36 +632,65 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
             if accelerator.is_main_process:
                 print(f"📊 检测到pos_weight配置为标量 {config_pos_weight}，开始动态计算每个类别的pos_weight...")
 
+            # 🔧 优化：直接从数据集的samples属性读取标签，避免加载图像数据
             # 收集所有训练样本的标签
             all_labels = []
-            for batch_idx, (_, targets) in enumerate(train_dataloader):
-                all_labels.append(targets.cpu())
-                # 只采样部分数据以加快计算（最多1000个batch）
-                if batch_idx >= 1000:
-                    break
+
+            # 检查数据集是否有samples属性（NeonatalMultilabelDataset有）
+            if hasattr(dataset, 'samples'):
+                # 直接从samples读取标签，避免加载图像
+                for sample in dataset.samples:
+                    labels = sample['labels']
+                    if isinstance(labels, list):
+                        labels = torch.tensor(labels, dtype=torch.float32)
+                    elif not isinstance(labels, torch.Tensor):
+                        labels = torch.tensor(labels, dtype=torch.float32)
+                    all_labels.append(labels)
+
+                if accelerator.is_main_process:
+                    print(f"   ✅ 从数据集samples属性读取标签 (快速模式)")
+            else:
+                # 降级方案：遍历DataLoader（较慢）
+                if accelerator.is_main_process:
+                    print(f"   ⚠️  数据集没有samples属性，遍历DataLoader读取标签 (较慢)...")
+
+                for batch_idx, (_, targets) in enumerate(train_dataloader):
+                    all_labels.append(targets.cpu())
+                    # 只采样部分数据以加快计算（最多1000个batch）
+                    if batch_idx >= 1000:
+                        break
 
             if all_labels:
-                all_labels = torch.cat(all_labels, dim=0)  # (N, num_classes)
+                all_labels = torch.stack(all_labels) if isinstance(all_labels[0], torch.Tensor) and all_labels[0].dim() == 1 else torch.cat(all_labels, dim=0)
                 pos_counts = all_labels.sum(dim=0)  # 每个类别的正样本数
                 total_samples = all_labels.shape[0]
                 neg_counts = total_samples - pos_counts  # 每个类别的负样本数
 
-                # 计算pos_weight = neg_samples / pos_samples
-                # 添加小的epsilon避免除零
-                pos_weight = neg_counts / (pos_counts + 1e-6)
+                # 🔧 优化：使用平方根缩放计算pos_weight，避免极端值
+                # 原始公式: pos_weight = neg_samples / pos_samples
+                # 问题: 对于极度稀有的类别会产生极大的权重(如51.36)，导致模型过度预测正类
+                #
+                # 新公式: pos_weight = sqrt(neg_samples / pos_samples)
+                # 优点:
+                #   1. 仍然给稀有类别更高权重，但不会过度
+                #   2. 例如: 原始51.36 -> sqrt(51.36) ≈ 7.17
+                #   3. 更平衡的权重分布，避免模型过度偏向某些类别
+                raw_ratio = neg_counts / (pos_counts + 1e-6)
+                pos_weight = torch.sqrt(raw_ratio)
 
                 # 限制pos_weight的范围，避免极端值
-                pos_weight = torch.clamp(pos_weight, min=1.0, max=100.0)
+                # 降低上限从100.0到10.0，因为使用了平方根缩放
+                pos_weight = torch.clamp(pos_weight, min=1.0, max=10.0)
 
                 loss_config['params']['pos_weight'] = pos_weight
 
                 if accelerator.is_main_process:
-                    print(f"✅ 动态计算的pos_weight:")
+                    print(f"✅ 动态计算的pos_weight (基于{total_samples}个样本，使用平方根缩放):")
                     class_names = dataset.get_class_names() if hasattr(dataset, 'get_class_names') else None
                     for i in range(num_classes):
                         class_name = class_names[i] if class_names else f"类别{i}"
                         print(f"   {class_name}: pos={int(pos_counts[i])}, neg={int(neg_counts[i])}, "
-                              f"pos_weight={pos_weight[i]:.2f}")
+                              f"ratio={raw_ratio[i]:.2f}, pos_weight={pos_weight[i]:.2f}")
 
         # 🔧 调试信息：确认参数传递
         print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
@@ -712,8 +741,6 @@ def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
         task_subdir = "video_classification"
     elif 'image' in task_tag.lower():
         task_subdir = "image_classification"
-    elif 'text' in task_tag.lower():
-        task_subdir = "text_classification"
     else:
         # 默认使用数据集类型作为子目录名
         task_subdir = dataset_type.replace('_', '_').lower() or "general"

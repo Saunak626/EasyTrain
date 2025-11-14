@@ -12,11 +12,15 @@ import os
 import torch
 import numpy as np
 import pandas as pd
+import logging
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 # 优化：引入 classification_report 和 accuracy_score
-from sklearn.metrics import (precision_score, recall_score, f1_score, 
+from sklearn.metrics import (precision_score, recall_score, f1_score,
                              classification_report, accuracy_score)
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class MultilabelMetricsCalculator:
@@ -25,20 +29,27 @@ class MultilabelMetricsCalculator:
     负责计算和管理多标签分类的详细指标，包括每个类别的性能指标。
     """
     
-    def __init__(self, class_names: List[str], output_dir: str = "runs/neonatal"):
+    def __init__(self, class_names: List[str], output_dir: str = "runs/neonatal",
+                 dataset=None, model_type: str = None, exp_name: str = None):
         """初始化指标计算器
-        
+
         Args:
             class_names: 类别名称列表
             output_dir: 输出目录
+            dataset: 数据集对象（用于获取样本的session_name等元数据）
+            model_type: 模型类型（如r3d_18）
+            exp_name: 实验名称（如grid_001）
         """
         self.class_names = class_names
         self.num_classes = len(class_names)
         self.output_dir = output_dir
-        
+        self.dataset = dataset  # 保存dataset引用，用于获取样本元数据
+        self.model_type = model_type or "unknown"
+        self.exp_name = exp_name or "unknown"
+
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # 初始化最佳指标追踪
         self.best_metrics = {
             'epoch': 0,
@@ -51,6 +62,9 @@ class MultilabelMetricsCalculator:
             'micro_avg': {},
             'weighted_avg': {}
         }
+
+        # 用于收集样本级别的预测结果（用于视频级别聚合）
+        self.sample_predictions = []  # 每个元素: {'session_name', 'predictions', 'targets', 'metrics'}
 
         # 为每个类别单独追踪最佳指标
         self.best_class_metrics = {}
@@ -224,14 +238,26 @@ class MultilabelMetricsCalculator:
 
         return main_line + "\n" + "\n".join(detail_lines)
     
-    def update_best_metrics(self, metrics: Dict[str, Any], epoch: int) -> bool:
+    def update_best_metrics(self, metrics: Dict[str, Any], epoch: int,
+                           predictions: np.ndarray = None, targets: np.ndarray = None) -> bool:
         """更新最佳指标记录（包括每个类别的最佳指标）
 
-        (无需修改)
+        Args:
+            metrics: 详细指标字典
+            epoch: 当前epoch编号
+            predictions: 预测概率数组 (n_samples, n_classes)
+            targets: 真实标签数组 (n_samples, n_classes)
+
+        Returns:
+            是否为整体最佳指标
         """
         current_f1 = metrics['macro_avg']['f1']
+        current_accuracy = metrics['macro_avg']['accuracy']
         is_best_overall = False
+        is_best_f1 = False
+        is_best_accuracy = False
 
+        # 检查是否为最佳F1分数
         if current_f1 > self.best_metrics['macro_avg_f1']:
             self.best_metrics = {
                 'epoch': epoch,
@@ -245,6 +271,21 @@ class MultilabelMetricsCalculator:
                 'weighted_avg': metrics['weighted_avg'].copy()
             }
             is_best_overall = True
+            is_best_f1 = True
+
+            # 生成最佳F1时的视频级别报告
+            if predictions is not None and targets is not None:
+                self.save_video_metrics_files(predictions, targets, epoch, metric_type='best_f1')
+
+        # 检查是否为最佳准确率（独立于F1）
+        if current_accuracy > self.best_metrics.get('best_accuracy_value', 0.0):
+            self.best_metrics['best_accuracy_value'] = current_accuracy
+            self.best_metrics['best_accuracy_epoch'] = epoch
+            is_best_accuracy = True
+
+            # 生成最佳准确率时的视频级别报告
+            if predictions is not None and targets is not None:
+                self.save_video_metrics_files(predictions, targets, epoch, metric_type='best_accuracy')
 
         for class_name, class_metric in metrics['class_metrics'].items():
             if class_name in self.best_class_metrics:
@@ -259,6 +300,143 @@ class MultilabelMetricsCalculator:
 
         self.save_best_metrics_files()
         return is_best_overall
+
+    def aggregate_video_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> pd.DataFrame:
+        """按视频名称聚合片段级别的指标
+
+        Args:
+            predictions: 预测概率数组 (n_samples, n_classes)
+            targets: 真实标签数组 (n_samples, n_classes)
+
+        Returns:
+            包含每个视频聚合指标的DataFrame
+        """
+        # 检查是否有dataset引用
+        if self.dataset is None:
+            logger.warning("未提供dataset引用，无法生成视频级别报告")
+            return None
+
+        # 检查dataset是否有samples属性
+        if not hasattr(self.dataset, 'samples'):
+            logger.warning("dataset没有samples属性，无法生成视频级别报告")
+            return None
+
+        # 检查样本数量是否匹配
+        if len(self.dataset.samples) != len(predictions):
+            logger.warning(f"样本数量不匹配: dataset={len(self.dataset.samples)}, predictions={len(predictions)}")
+            return None
+
+        # 收集每个样本的session_name和指标
+        video_data = {}  # {session_name: {'clips': [], 'predictions': [], 'targets': []}}
+
+        for idx in range(len(predictions)):
+            sample = self.dataset.samples[idx]
+
+            # 获取session_name（向后兼容）
+            session_name = sample.get('session_name', sample.get('video_name', f'unknown_{idx}'))
+
+            if session_name not in video_data:
+                video_data[session_name] = {
+                    'clips': [],
+                    'predictions': [],
+                    'targets': []
+                }
+
+            video_data[session_name]['clips'].append(idx)
+            video_data[session_name]['predictions'].append(predictions[idx])
+            video_data[session_name]['targets'].append(targets[idx])
+
+        # 计算每个视频的聚合指标
+        video_metrics = []
+
+        for session_name, data in video_data.items():
+            # 转换为numpy数组
+            video_preds = np.array(data['predictions'])  # (n_clips, n_classes)
+            video_targets = np.array(data['targets'])    # (n_clips, n_classes)
+
+            # 计算该视频所有片段的平均指标（宏平均）
+            # 对每个片段计算指标，然后平均
+            clip_precisions = []
+            clip_recalls = []
+            clip_f1s = []
+            clip_accuracies = []
+
+            for clip_pred, clip_target in zip(video_preds, video_targets):
+                # 二值化预测
+                clip_pred_binary = (clip_pred > 0.5).astype(int)
+                clip_target_binary = clip_target.astype(int)
+
+                # 计算每个类别的指标，然后宏平均
+                precision = precision_score(clip_target_binary, clip_pred_binary,
+                                          average='macro', zero_division=0)
+                recall = recall_score(clip_target_binary, clip_pred_binary,
+                                    average='macro', zero_division=0)
+                f1 = f1_score(clip_target_binary, clip_pred_binary,
+                            average='macro', zero_division=0)
+                accuracy = accuracy_score(clip_target_binary, clip_pred_binary)
+
+                clip_precisions.append(precision)
+                clip_recalls.append(recall)
+                clip_f1s.append(f1)
+                clip_accuracies.append(accuracy)
+
+            # 计算该视频的平均指标
+            video_metrics.append({
+                'session_name': session_name,
+                'total_clips': len(data['clips']),
+                'avg_precision': np.mean(clip_precisions),
+                'avg_recall': np.mean(clip_recalls),
+                'avg_f1': np.mean(clip_f1s),
+                'avg_accuracy': np.mean(clip_accuracies)
+            })
+
+        # 转换为DataFrame并按avg_f1排序（从低到高，方便识别表现差的视频）
+        df = pd.DataFrame(video_metrics)
+        df = df.sort_values('avg_f1', ascending=True)
+
+        return df
+
+    def save_video_metrics_files(self, predictions: np.ndarray, targets: np.ndarray,
+                                 epoch: int, metric_type: str = 'best_f1'):
+        """保存视频级别的指标到CSV文件
+
+        Args:
+            predictions: 预测概率数组 (n_samples, n_classes)
+            targets: 真实标签数组 (n_samples, n_classes)
+            epoch: 当前epoch编号
+            metric_type: 指标类型 ('best_f1' 或 'best_accuracy')
+        """
+        # 聚合视频级别的指标
+        df = self.aggregate_video_metrics(predictions, targets)
+
+        if df is None or df.empty:
+            return
+
+        # 添加额外的元数据列
+        df['best_epoch'] = epoch
+        df['model_type'] = self.model_type
+        df['exp_name'] = self.exp_name
+
+        # 重新排列列的顺序
+        columns_order = ['session_name', 'total_clips', 'avg_precision', 'avg_recall',
+                        'avg_f1', 'avg_accuracy', 'best_epoch', 'model_type', 'exp_name']
+        df = df[columns_order]
+
+        # 生成文件名
+        filename = f"video_metrics_{self.model_type}_{self.exp_name}_{metric_type}.csv"
+        filepath = os.path.join(self.output_dir, filename)
+
+        # 保存到CSV
+        df.to_csv(filepath, index=False, encoding='utf-8-sig')
+        logger.info(f"📊 视频级别指标已保存: {filename}")
+        logger.info(f"   共 {len(df)} 个视频，平均F1分数: {df['avg_f1'].mean():.4f}")
+
+        # 显示表现最差的5个视频
+        worst_videos = df.head(5)
+        logger.info(f"   表现最差的5个视频:")
+        for idx, row in worst_videos.iterrows():
+            logger.info(f"      {row['session_name']}: F1={row['avg_f1']:.4f}, "
+                       f"clips={row['total_clips']}, acc={row['avg_accuracy']:.4f}")
 
     def save_best_metrics_files(self):
         """保存最佳指标到文件

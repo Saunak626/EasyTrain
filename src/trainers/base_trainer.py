@@ -396,8 +396,12 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
                 all_pred_array, all_target_array, threshold=0.5
             )
 
-            # 更新最佳指标
-            is_best = metrics_calculator.update_best_metrics(detailed_metrics, epoch)
+            # 更新最佳指标（传递预测和目标数组用于视频级别报告）
+            is_best = metrics_calculator.update_best_metrics(
+                detailed_metrics, epoch,
+                predictions=all_pred_array,
+                targets=all_target_array
+            )
 
             # 保存指标（保持原有功能）
             metrics_calculator.save_metrics(detailed_metrics, epoch, avg_loss, is_best)
@@ -1057,13 +1061,28 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
         if class_names:
             # 根据任务类型创建对应的输出目录
             task_dir = get_task_output_dir(task_tag, dataset_type)
+
+            # 获取测试数据集（用于视频级别报告）
+            test_dataset = test_dataloader.dataset
+            # 处理Subset包装的情况
+            from torch.utils.data import Subset
+            if isinstance(test_dataset, Subset):
+                test_dataset = test_dataset.dataset
+
+            # 提取model_type和exp_name
+            model_type = config.get('hp', {}).get('model_type', 'unknown')
+
             metrics_calculator = MultilabelMetricsCalculator(
                 class_names=class_names,
-                output_dir=task_dir
+                output_dir=task_dir,
+                dataset=test_dataset,  # 传递测试数据集用于获取session_name
+                model_type=model_type,
+                exp_name=exp_name
             )
             if accelerator.is_main_process:
                 tqdm.write(f"📊 启用详细多标签评估，类别数: {len(class_names)}")
                 tqdm.write(f"📁 指标保存目录: {task_dir}")
+                tqdm.write(f"🎬 启用视频级别指标报告（测试集样本数: {len(test_dataset.samples) if hasattr(test_dataset, 'samples') else '未知'}）")
         else:
             if accelerator.is_main_process:
                 tqdm.write(f"⚠️ 多标签任务检测成功，但未获取到类别名称")

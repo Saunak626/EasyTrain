@@ -57,6 +57,14 @@ src/trainers/base_trainer.py:32-65     # SUPPORTED_TASKS定义
 src/trainers/base_trainer.py:67-89     # 向后兼容推断
 ```
 
+### 🎬 任务配置与入口
+- **单实验（UCF101）**：`python scripts/train.py --config config/ucf101_video.yaml`
+- **网格搜索（UCF101）**：`python scripts/grid_search.py --config config/ucf101_video_grid.yaml`
+- **单实验（Neonatal，多标签）**：`python scripts/train.py --config config/neonatal_multilabel.yaml`
+- **网格搜索（Neonatal，多标签）**：`python scripts/grid_search.py --config config/neonatal_multilabel_grid.yaml`
+- **配置示例**：`config/examples` 提供最小化模板，可复制后按需修改 `task.tag`、`data.type`、`model.type` 等字段。
+- ✅ **唯一入口**：所有训练流程都通过 `scripts/train.py` / `scripts/grid_search.py` 加 YAML 配置驱动，旧版 `tmp/train_multilabel.py` 已移除，避免冗余参数和重复实现。
+
 #### 阶段3: 模型系统 (60分钟)
 ```
 src/models/model_registry.py:11-97     # 模型注册表

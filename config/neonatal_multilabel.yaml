@@ -1,0 +1,70 @@
+# 新生儿多标签行为识别训练配置
+# 通过标准单实验入口（scripts/train.py）运行
+
+# 任务配置
+task:
+  tag: "video_classification"
+  description: "Neonatal feeding behavior multi-label classification"
+
+# 训练配置
+training:
+  exp_name: neonatal_multilabel_r3d18
+  save_model: true
+  model_save_path: "models/neonatal_multilabel_model.pth"
+
+# SwanLab实验追踪配置
+swanlab:
+  project_name: "EasyTrain-Neonatal-Multilabel"
+  description: "单实验：新生儿多标签行为识别"
+
+# 数据集配置
+data:
+  type: neonatal_multilabel
+  root: /home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments
+  num_workers: 12
+  params:
+    clip_len: 32
+    top_n_classes: 10
+    stratified_split: true
+    min_samples_per_class: 10
+    sampling_mode: "random"
+    # target_fps: 8           # 若启用fps模式需要设置
+    # original_fps: 16
+
+# 模型配置
+model:
+  type: r3d_18
+  params:
+    num_classes: 10           # 会被数据集自动覆盖
+
+# 超参数配置
+hp:
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 10
+
+# 优化器配置
+optimizer:
+  name: adamw
+  params:
+    weight_decay: 0.01
+
+# 学习率调度器配置
+scheduler:
+  name: warmup_cosine
+  params:
+    warmup_epochs: 2
+    warmup_start_factor: 1.0
+    eta_min_factor: 0.05
+
+# 损失函数配置
+loss:
+  name: focal_multilabel_bce
+  params:
+    pos_weight: 10.0
+
+# 输出配置
+output:
+  results_dir: "runs"
+  experiment_name: "neonatal_multilabel_single"
+  save_predictions: true

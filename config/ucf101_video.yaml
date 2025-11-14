@@ -19,7 +19,7 @@ swanlab:
 data:
   type: ucf101_video  # 使用新的视频帧数据集类型
   root: data/ucf101   # 数据集根目录
-  num_workers: 12      # 数据加载工作进程数
+  num_workers: 16      # 数据加载工作进程数
   params:
     clip_len: 16      # 每个视频片段的帧数
 
@@ -31,9 +31,9 @@ model:
 
 # 超参数配置
 hp:
-  batch_size: 128      # 批大小
+  batch_size: 64      # 批大小
   learning_rate: 0.001 # 学习率
-  epochs: 10          # 训练轮数
+  epochs: 20          # 训练轮数
 
 # 优化器配置
 optimizer:
@@ -46,7 +46,7 @@ scheduler:
   name: cosine        # 使用余弦退火调度器
   params:
     T_max: 50         # 最大轮数
-    eta_min: 0.00001  # 最小学习率
+    eta_min: 0.00005  # 最小学习率
 
 # 损失函数配置
 loss:

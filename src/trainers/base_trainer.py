@@ -666,31 +666,47 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
                 total_samples = all_labels.shape[0]
                 neg_counts = total_samples - pos_counts  # 每个类别的负样本数
 
-                # 🔧 优化：使用平方根缩放计算pos_weight，避免极端值
+                # 🔧 优化：使用自适应缩放计算pos_weight，避免极端值
                 # 原始公式: pos_weight = neg_samples / pos_samples
                 # 问题: 对于极度稀有的类别会产生极大的权重(如51.36)，导致模型过度预测正类
                 #
-                # 新公式: pos_weight = sqrt(neg_samples / pos_samples)
+                # 新公式: 自适应缩放策略
+                # - 对于轻度不平衡(ratio < 5): pos_weight = sqrt(ratio) * 0.8
+                # - 对于中度不平衡(5 <= ratio < 20): pos_weight = sqrt(ratio) * 0.6
+                # - 对于极度不平衡(ratio >= 20): pos_weight = sqrt(ratio) * 0.4
+                #
                 # 优点:
-                #   1. 仍然给稀有类别更高权重，但不会过度
-                #   2. 例如: 原始51.36 -> sqrt(51.36) ≈ 7.17
-                #   3. 更平衡的权重分布，避免模型过度偏向某些类别
+                #   1. 对于极度稀有的类别使用更激进的降权，避免过度预测
+                #   2. 对于轻度不平衡的类别保持较高权重，确保学习效果
+                #   3. 例如: 发脾气(ratio=51.36) -> sqrt(51.36) * 0.4 ≈ 2.87
                 raw_ratio = neg_counts / (pos_counts + 1e-6)
-                pos_weight = torch.sqrt(raw_ratio)
+
+                # 自适应缩放因子
+                scale_factor = torch.where(
+                    raw_ratio < 5.0,
+                    torch.tensor(0.8, device=raw_ratio.device),  # 轻度不平衡
+                    torch.where(
+                        raw_ratio < 20.0,
+                        torch.tensor(0.6, device=raw_ratio.device),  # 中度不平衡
+                        torch.tensor(0.4, device=raw_ratio.device)   # 极度不平衡
+                    )
+                )
+
+                pos_weight = torch.sqrt(raw_ratio) * scale_factor
 
                 # 限制pos_weight的范围，避免极端值
-                # 降低上限从100.0到10.0，因为使用了平方根缩放
-                pos_weight = torch.clamp(pos_weight, min=1.0, max=10.0)
+                pos_weight = torch.clamp(pos_weight, min=1.0, max=5.0)
 
                 loss_config['params']['pos_weight'] = pos_weight
 
                 if accelerator.is_main_process:
-                    print(f"✅ 动态计算的pos_weight (基于{total_samples}个样本，使用平方根缩放):")
+                    print(f"✅ 动态计算的pos_weight (基于{total_samples}个样本，使用自适应缩放):")
                     class_names = dataset.get_class_names() if hasattr(dataset, 'get_class_names') else None
                     for i in range(num_classes):
                         class_name = class_names[i] if class_names else f"类别{i}"
+                        scale = scale_factor[i].item() if isinstance(scale_factor, torch.Tensor) else scale_factor
                         print(f"   {class_name}: pos={int(pos_counts[i])}, neg={int(neg_counts[i])}, "
-                              f"ratio={raw_ratio[i]:.2f}, pos_weight={pos_weight[i]:.2f}")
+                              f"ratio={raw_ratio[i]:.2f}, scale={scale:.1f}, pos_weight={pos_weight[i]:.2f}")
 
         # 🔧 调试信息：确认参数传递
         print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")

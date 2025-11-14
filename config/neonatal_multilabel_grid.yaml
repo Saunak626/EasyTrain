@@ -101,9 +101,12 @@ grid_search:
       scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
       scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
       scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
-      loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
+      # 🔧 方案A: 完全禁用Focal Loss，只使用BCE + pos_weight（推荐）
+      loss.name: ["multilabel_bce"]  # 纯BCE损失，避免Focal Loss过度降低负样本权重
       loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡（会被动态计算覆盖）
-      loss.params.gamma: [1.0]  # 🔧 Focal Loss的gamma参数，降低到1.0避免过度聚焦
+      # 🔧 方案B: 如果要使用Focal Loss，取消下面两行的注释，注释掉上面的loss.name
+      # loss.name: ["focal_multilabel_bce"]
+      # loss.params.gamma: [0.5]  # 进一步降低gamma到0.5
       
     # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     transformer_models:

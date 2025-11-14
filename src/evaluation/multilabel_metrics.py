@@ -316,24 +316,40 @@ class MultilabelMetricsCalculator:
             logger.warning("未提供dataset引用，无法生成视频级别报告")
             return None
 
+        # 支持Subset包装的数据集：提取实际数据集和索引映射
+        from torch.utils.data import Subset
+        if isinstance(self.dataset, Subset):
+            actual_dataset = self.dataset.dataset
+            indices = self.dataset.indices
+        else:
+            actual_dataset = self.dataset
+            indices = list(range(len(predictions)))
+
         # 检查dataset是否有samples属性
-        if not hasattr(self.dataset, 'samples'):
+        if not hasattr(actual_dataset, 'samples'):
             logger.warning("dataset没有samples属性，无法生成视频级别报告")
             return None
 
-        # 检查样本数量是否匹配
-        if len(self.dataset.samples) != len(predictions):
-            logger.warning(f"样本数量不匹配: dataset={len(self.dataset.samples)}, predictions={len(predictions)}")
+        if len(indices) != len(predictions):
+            logger.warning(
+                f"样本数量不匹配: indices={len(indices)}, predictions={len(predictions)}; "
+                f"无法进行视频级别聚合"
+            )
             return None
 
-        # 收集每个样本的session_name和指标
+        # 收集每个样本的session_name和指标（支持Subset索引映射）
         video_data = {}  # {session_name: {'clips': [], 'predictions': [], 'targets': []}}
 
-        for idx in range(len(predictions)):
-            sample = self.dataset.samples[idx]
+        for local_idx, orig_idx in enumerate(indices):
+            # 防御性检查：避免索引越界
+            if orig_idx < 0 or orig_idx >= len(actual_dataset.samples):
+                logger.warning(f"索引 {orig_idx} 超出actual_dataset.samples范围，跳过该样本")
+                continue
+
+            sample = actual_dataset.samples[orig_idx]
 
             # 获取session_name（向后兼容）
-            session_name = sample.get('session_name', sample.get('video_name', f'unknown_{idx}'))
+            session_name = sample.get('session_name', sample.get('video_name', f'unknown_{orig_idx}'))
 
             if session_name not in video_data:
                 video_data[session_name] = {
@@ -342,9 +358,9 @@ class MultilabelMetricsCalculator:
                     'targets': []
                 }
 
-            video_data[session_name]['clips'].append(idx)
-            video_data[session_name]['predictions'].append(predictions[idx])
-            video_data[session_name]['targets'].append(targets[idx])
+            video_data[session_name]['clips'].append(orig_idx)
+            video_data[session_name]['predictions'].append(predictions[local_idx])
+            video_data[session_name]['targets'].append(targets[local_idx])
 
         # 计算每个视频的聚合指标
         video_metrics = []

@@ -561,9 +561,16 @@ def setup_data_and_model(config: Dict[str, Any], task_info: Dict[str, Any], data
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
     # 对于多标签数据集，从实际数据集实例获取类别名称
-    if dataset_type == 'neonatal_multilabel' and hasattr(train_dataloader.dataset, 'get_class_names'):
-        dataset_info['classes'] = train_dataloader.dataset.get_class_names()
-        dataset_info['num_classes'] = len(dataset_info['classes'])
+    # 🔧 修复：支持Subset包装的数据集
+    if dataset_type == 'neonatal_multilabel':
+        from torch.utils.data import Subset
+        actual_dataset = train_dataloader.dataset
+        if isinstance(actual_dataset, Subset):
+            actual_dataset = actual_dataset.dataset
+
+        if hasattr(actual_dataset, 'get_class_names'):
+            dataset_info['classes'] = actual_dataset.get_class_names()
+            dataset_info['num_classes'] = len(dataset_info['classes'])
 
     # 基于任务类型创建模型
     model_factory_name = task_info['model_factory']
@@ -1062,19 +1069,29 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
             # 根据任务类型创建对应的输出目录
             task_dir = get_task_output_dir(task_tag, dataset_type)
 
-            # 获取测试数据集（用于视频级别报告）
-            test_dataset = test_dataloader.dataset
-            # 处理Subset包装的情况
-            from torch.utils.data import Subset
-            if isinstance(test_dataset, Subset):
-                test_dataset = test_dataset.dataset
+            # 🔧 新增：优先使用grid_search_dir（如果存在），否则使用默认的task_dir
+            # 这样视频级别指标文件会直接创建在网格搜索目录中，而不是根目录
+            if 'grid_search_dir' in config:
+                output_dir = config['grid_search_dir']
+                if accelerator.is_main_process:
+                    tqdm.write(f"📁 使用网格搜索目录保存指标: {output_dir}")
+            else:
+                output_dir = task_dir
 
-            # 提取model_type和exp_name
-            model_type = config.get('hp', {}).get('model_type', 'unknown')
+            # 获取测试数据集（用于视频级别报告）
+            # 这里直接保留DataLoader返回的数据集对象（可能是Subset），
+            # 在MultilabelMetricsCalculator内部处理Subset索引映射，以保证与predictions长度一致。
+            test_dataset = test_dataloader.dataset
+
+            # 提取model_type和exp_name：优先从model.type获取，其次回退到hp.model_type
+            model_type = config.get('model', {}).get(
+                'type',
+                config.get('hp', {}).get('model_type', 'unknown')
+            )
 
             metrics_calculator = MultilabelMetricsCalculator(
                 class_names=class_names,
-                output_dir=task_dir,
+                output_dir=output_dir,  # 使用grid_search_dir或task_dir
                 dataset=test_dataset,  # 传递测试数据集用于获取session_name
                 model_type=model_type,
                 exp_name=exp_name
@@ -1082,7 +1099,17 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
             if accelerator.is_main_process:
                 tqdm.write(f"📊 启用详细多标签评估，类别数: {len(class_names)}")
                 tqdm.write(f"📁 指标保存目录: {task_dir}")
-                tqdm.write(f"🎬 启用视频级别指标报告（测试集样本数: {len(test_dataset.samples) if hasattr(test_dataset, 'samples') else '未知'}）")
+
+                # 显示测试集样本数（支持Subset）
+                from torch.utils.data import Subset
+                if isinstance(test_dataset, Subset):
+                    actual_dataset = test_dataset.dataset
+                    subset_size = len(test_dataset.indices)
+                    total_size = len(actual_dataset.samples) if hasattr(actual_dataset, 'samples') else len(actual_dataset)
+                    tqdm.write(f"🎬 启用视频级别指标报告（测试集样本数: {subset_size}/{total_size}）")
+                else:
+                    total_size = len(test_dataset.samples) if hasattr(test_dataset, 'samples') else len(test_dataset)
+                    tqdm.write(f"🎬 启用视频级别指标报告（测试集样本数: {total_size}）")
         else:
             if accelerator.is_main_process:
                 tqdm.write(f"⚠️ 多标签任务检测成功，但未获取到类别名称")

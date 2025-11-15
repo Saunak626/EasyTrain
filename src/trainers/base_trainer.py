@@ -28,10 +28,13 @@ from src.optimizers.optimizer_factory import get_optimizer    # 优化器工厂�
 from src.schedules.scheduler_factory import get_scheduler     # 学习率调度器工厂函数
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
+from src.utils.training_utils import get_task_output_dir  # 任务目录工具
+from src.trainers.metrics_logger import MetricsLogger  # 统一指标日志记录器
+from src.trainers.metrics_collector import MetricsCollector  # 统一指标收集器
 
-# ============================================================================
+# =======================================
 # 模块级常量配置
-# ============================================================================
+# =======================================
 
 # 训练相关常量
 TRAINING_CONSTANTS = {
@@ -68,9 +71,9 @@ def resolve_base_dataset(dataset):
         max_depth -= 1
     return base
 
-# ============================================================================
+# =======================================
 # 进度条管理类
-# ============================================================================
+# =======================================
 
 class ProgressBarManager:
     """统一的进度条管理器
@@ -127,14 +130,9 @@ class ProgressBarManager:
         return None
 
 
-# ============================================================================
+# =======================================
 # 辅助函数
-# ============================================================================
-
-def is_main_process() -> bool:
-    """检查是否为主进程（用于避免重复输出）"""
-    return int(os.environ.get("LOCAL_RANK", 0)) == 0
-
+# =======================================
 
 def get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr):
     """获取学习率监控信息
@@ -194,10 +192,9 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     total_loss = 0.0
     num_batches = 0
 
-    # 🔧 新增：收集训练数据用于指标计算
-    all_predictions = []
-    all_targets = []
-    is_multilabel = metrics_calculator is not None
+    # 使用统一的指标收集器和日志记录器
+    metrics_collector = MetricsCollector(accelerator, metrics_calculator) if metrics_calculator else None
+    metrics_logger = MetricsLogger(accelerator)
 
     # 使用统一的进度条管理器
     progress_manager = ProgressBarManager(accelerator)
@@ -215,11 +212,10 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         total_loss += loss.item()
         num_batches += 1
 
-        # 🔧 优化：每个进程本地收集预测,在epoch结束统一聚合
-        if is_multilabel:
-            probs = torch.sigmoid(outputs).detach()
-            all_predictions.append(probs)
-            all_targets.append(targets.detach())
+        # 收集预测和标签用于指标计算
+        if metrics_collector:
+            probs = torch.sigmoid(outputs)
+            metrics_collector.collect(probs, targets)
 
         # 降低日志频率,每10个batch记录一次
         if batch_idx % 10 == 0:
@@ -244,48 +240,12 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
     # 计算平均训练损失
     avg_train_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # 🔧 新增：计算训练集指标（如果是多标签任务）
+    # 计算并记录训练集指标
     train_accuracy = 0.0
-    if is_multilabel and all_predictions:
-        local_pred_tensor = torch.cat(all_predictions, dim=0)
-        local_target_tensor = torch.cat(all_targets, dim=0)
-
-        global_pred = accelerator.gather_for_metrics(local_pred_tensor)
-        global_target = accelerator.gather_for_metrics(local_target_tensor)
-
-        if accelerator.is_main_process:
-            all_pred_array = global_pred.cpu().numpy()
-            all_target_array = global_target.cpu().numpy()
-
-            # 计算训练集详细指标
-            train_metrics = metrics_calculator.calculate_detailed_metrics(
-                all_pred_array, all_target_array, threshold=0.5
-            )
-
-            # 保存训练集指标到单独的CSV文件
-            metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
-
-            # 记录训练集指标到SwanLab
-            accelerator.log({
-                "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
-                "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
-                "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
-                "train/macro_f1": train_metrics['macro_avg']['f1'],
-                "train/micro_f1": train_metrics['micro_avg']['f1'],
-                "train/weighted_f1": train_metrics['weighted_avg']['f1'],
-                "train/macro_precision": train_metrics['macro_avg']['precision'],
-                "train/macro_recall": train_metrics['macro_avg']['recall']
-            }, step=epoch)
-
-            # 🔧 新增：记录每个类别的训练指标到SwanLab
-            for class_name, class_metrics in train_metrics['class_metrics'].items():
-                accelerator.log({
-                    f"train_class/{class_name}/f1": class_metrics['f1'],
-                    f"train_class/{class_name}/precision": class_metrics['precision'],
-                    f"train_class/{class_name}/recall": class_metrics['recall'],
-                    f"train_class/{class_name}/accuracy": class_metrics['accuracy']
-                }, step=epoch)
-
+    if metrics_collector:
+        train_metrics = metrics_collector.compute_and_reset(epoch, 'train', avg_train_loss)
+        if train_metrics and accelerator.is_main_process:
+            metrics_logger.log_multilabel_metrics(train_metrics, 'train', epoch)
             train_accuracy = train_metrics['macro_avg']['accuracy']
 
     return avg_train_loss, train_accuracy
@@ -321,9 +281,9 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     local_correct = torch.tensor(0, device=device)     # 当前GPU的正确预测数
     local_samples = torch.tensor(0, device=device)     # 当前GPU的样本总数
 
-    # 用于详细多标签评估的数据收集
-    all_predictions = []
-    all_targets = []
+    # 使用统一的指标收集器和日志记录器
+    metrics_collector = MetricsCollector(accelerator, metrics_calculator) if metrics_calculator else None
+    metrics_logger = MetricsLogger(accelerator)
     is_multilabel = False
 
     # 使用统一的进度条管理器
@@ -350,11 +310,10 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
                 targets_bool = targets.bool()
 
                 # 收集预测和目标数据用于详细评估
-                if metrics_calculator is not None:
+                if metrics_collector:
                     # 收集sigmoid概率和真实标签
                     sigmoid_probs = torch.sigmoid(outputs)
-                    all_predictions.append(sigmoid_probs.cpu().numpy())
-                    all_targets.append(targets.cpu().numpy())
+                    metrics_collector.collect(sigmoid_probs, targets)
 
                 # 计算每个类别的准确率，然后平均（宏平均）
                 class_accuracies = []
@@ -396,68 +355,24 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
         avg_loss = (total_loss / total_samples).item()
         accuracy = 100. * total_correct.item() / total_samples.item()
 
-        # 如果有多标签指标计算器且收集了数据，进行详细评估
-        if metrics_calculator is not None and all_predictions and is_multilabel:
-            # 先在本地合并所有批次的预测和目标
-            local_pred_array = np.concatenate(all_predictions, axis=0)
-            local_target_array = np.concatenate(all_targets, axis=0)
+        # 计算并记录测试集指标
+        if metrics_collector and is_multilabel:
+            detailed_metrics = metrics_collector.compute_and_reset(epoch, 'test', avg_loss)
+            if detailed_metrics and accelerator.is_main_process:
+                # 显示详细指标
+                detailed_display = metrics_calculator.format_metrics_display(
+                    detailed_metrics, epoch, avg_loss, train_batches or 0
+                )
+                tqdm.write(detailed_display)
 
-            # 转换为tensor并跨所有GPU汇总数据
-            local_pred_tensor = torch.from_numpy(local_pred_array).to(accelerator.device)
-            local_target_tensor = torch.from_numpy(local_target_array).to(accelerator.device)
+                # 检查是否为最佳模型
+                is_best = detailed_metrics.get('is_best', False)
+                if is_best:
+                    tqdm.write(f"🏆 新最佳宏平均F1分数: {detailed_metrics['macro_avg']['f1']:.4f}")
 
-            # 使用gather_for_metrics汇总所有GPU的预测和标签
-            all_pred_tensor = accelerator.gather_for_metrics(local_pred_tensor)
-            all_target_tensor = accelerator.gather_for_metrics(local_target_tensor)
-
-            # 转换回numpy进行指标计算
-            all_pred_array = all_pred_tensor.cpu().numpy()
-            all_target_array = all_target_tensor.cpu().numpy()
-
-            # 计算详细指标
-            detailed_metrics = metrics_calculator.calculate_detailed_metrics(
-                all_pred_array, all_target_array, threshold=0.5
-            )
-
-            # 更新最佳指标
-            is_best = metrics_calculator.update_best_metrics(detailed_metrics, epoch)
-
-            # 保存指标（保持原有功能）
-            metrics_calculator.save_metrics(detailed_metrics, epoch, avg_loss, is_best)
-
-            # 🔧 新增：保存测试集指标到单独的CSV文件
-            metrics_calculator.save_test_metrics(detailed_metrics, epoch, avg_loss)
-
-            # 显示详细指标
-            detailed_display = metrics_calculator.format_metrics_display(
-                detailed_metrics, epoch, avg_loss, train_batches or 0
-            )
-            tqdm.write(detailed_display)
-
-            if is_best:
-                tqdm.write(f"🏆 新最佳宏平均F1分数: {detailed_metrics['macro_avg']['f1']:.4f}")
-
-            # 记录详细指标到实验追踪系统
-            accelerator.log({
-                "test/loss": avg_loss,
-                "test/macro_accuracy": detailed_metrics['macro_avg']['accuracy'],
-                "test/micro_accuracy": detailed_metrics['micro_avg']['accuracy'],
-                "test/weighted_accuracy": detailed_metrics['weighted_avg']['accuracy'],
-                "test/macro_f1": detailed_metrics['macro_avg']['f1'],
-                "test/micro_f1": detailed_metrics['micro_avg']['f1'],
-                "test/weighted_f1": detailed_metrics['weighted_avg']['f1'],
-                "test/macro_precision": detailed_metrics['macro_avg']['precision'],
-                "test/macro_recall": detailed_metrics['macro_avg']['recall']
-            }, step=epoch)
-
-            # 🔧 新增：记录每个类别的测试指标到SwanLab
-            for class_name, class_metrics in detailed_metrics['class_metrics'].items():
-                accelerator.log({
-                    f"test_class/{class_name}/f1": class_metrics['f1'],
-                    f"test_class/{class_name}/precision": class_metrics['precision'],
-                    f"test_class/{class_name}/recall": class_metrics['recall'],
-                    f"test_class/{class_name}/accuracy": class_metrics['accuracy']
-                }, step=epoch)
+                # 记录测试损失和详细指标
+                metrics_logger.log_test_loss(avg_loss, epoch)
+                metrics_logger.log_multilabel_metrics(detailed_metrics, 'test', epoch)
         else:
             # 标准输出（单标签或无详细评估）
             log_msg = f'Epoch {epoch:03d} | val_loss={avg_loss:.4f} | val_acc={accuracy:.2f}%'
@@ -466,7 +381,7 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
             tqdm.write(log_msg)
 
             # 记录测试指标到实验追踪系统
-            accelerator.log({"test/loss": avg_loss, "test/accuracy": accuracy}, step=epoch)
+            metrics_logger.log_simple_metrics(avg_loss, accuracy, 'test', epoch)
 
         return avg_loss, accuracy
 
@@ -474,9 +389,9 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
     return None, None
 
 
-# ============================================================================
+# =======================================
 # 训练流程拆分函数
-# ============================================================================
+# =======================================
 
 def setup_experiment(config: Dict[str, Any], exp_name: Optional[str] = None) -> Tuple[str, Dict[str, Any], str, Dict[str, Any], Accelerator]:
     """实验环境初始化
@@ -686,41 +601,7 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     return loss_fn, optimizer, lr_scheduler
 
 
-def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
-    """根据任务类型获取输出目录
-
-    Args:
-        task_tag: 任务标签
-        dataset_type: 数据集类型
-
-    Returns:
-        任务对应的输出目录路径
-    """
-    # 基础输出目录
-    base_dir = "runs"
-
-    # 根据任务类型确定子目录名
-    if 'multilabel' in task_tag.lower() or 'multilabel' in dataset_type.lower():
-        if 'neonatal' in dataset_type.lower():
-            task_subdir = "neonatal_multilabel"
-        else:
-            task_subdir = "multilabel_classification"
-    elif 'video' in task_tag.lower():
-        task_subdir = "video_classification"
-    elif 'image' in task_tag.lower():
-        task_subdir = "image_classification"
-    elif 'text' in task_tag.lower():
-        task_subdir = "text_classification"
-    else:
-        # 默认使用数据集类型作为子目录名
-        task_subdir = dataset_type.replace('_', '_').lower() or "general"
-
-    output_dir = os.path.join(base_dir, task_subdir)
-
-    # 确保目录存在
-    os.makedirs(output_dir, exist_ok=True)
-
-    return output_dir
+# get_task_output_dir 已移至 src/utils/training_utils.py
 
 
 def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict[str, Any],
@@ -740,7 +621,7 @@ def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict
         test_dataloader: 测试数据加载器
         accelerator: Accelerator实例
     """
-    if not (accelerator.is_main_process and is_main_process()):
+    if not accelerator.is_main_process:
         return
 
     hyperparams = config['hp']

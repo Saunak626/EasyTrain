@@ -17,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments  # 参数解析器
 from src.trainers.base_trainer import run_training   # 核心训练函数
+from src.utils.training_utils import get_gpu_config_from_file, setup_gpu_environment  # GPU配置工具
 
 
 def _should_launch_with_accelerate(args, config):
@@ -39,12 +40,9 @@ def main():
     args, config = parse_arguments(mode='single_experiment')
 
     if _should_launch_with_accelerate(args, config):
-        gpu_ids = str(config.get('gpu', {}).get('device_ids', os.environ.get('CUDA_VISIBLE_DEVICES', '0')))
-        visible_ids = [gid.strip() for gid in gpu_ids.split(',') if gid.strip()]
-        num_gpus = max(1, len(visible_ids))
-
-        env = os.environ.copy()
-        env['CUDA_VISIBLE_DEVICES'] = ','.join(visible_ids)
+        # 使用共享工具函数获取GPU配置
+        gpu_ids, num_gpus = get_gpu_config_from_file(args.config)
+        env = setup_gpu_environment(gpu_ids)
 
         cmd = [
             "accelerate", "launch", "--multi_gpu", "--num_processes", str(num_gpus),

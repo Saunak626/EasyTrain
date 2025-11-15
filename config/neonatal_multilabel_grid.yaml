@@ -39,7 +39,7 @@ hp:
 
 # GPU配置
 gpu:
-  device_ids: "2,3"
+  device_ids: "2" # "2,3"
   auto_select: true
 
 # 多卡训练配置

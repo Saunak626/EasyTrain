@@ -21,6 +21,7 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments
+from src.utils.training_utils import get_gpu_config_from_file, setup_gpu_environment
 
 # ============================================================================
 # 模块级常量配置
@@ -1030,17 +1031,9 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
 
     # 组装命令
     if use_multi_gpu:
-        # 从配置文件读取GPU设置
-        import yaml
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-
-        # 获取GPU配置并设置环境变量
-        gpu_ids = config.get('gpu', {}).get('device_ids', '0')
-        env['CUDA_VISIBLE_DEVICES'] = str(gpu_ids)
-
-        # 计算可见GPU数量
-        num_gpus = len(str(gpu_ids).split(','))
+        # 使用共享工具函数获取GPU配置
+        gpu_ids, num_gpus = get_gpu_config_from_file(config_path)
+        env = setup_gpu_environment(gpu_ids)
         cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(num_gpus)]
     else:
         cmd = [sys.executable, "-u"]

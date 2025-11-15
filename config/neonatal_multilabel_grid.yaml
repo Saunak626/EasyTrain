@@ -3,7 +3,7 @@
 
 # 任务配置
 task:
-  tag: "video_classification"  # 使用视频分类任务类型
+  tag: "video_classification" # 使用视频分类任务类型
   description: "新生儿多标签行为识别网格搜索"
 
 # 训练配置
@@ -19,14 +19,14 @@ swanlab:
 
 # 数据配置
 data:
-  type: neonatal_multilabel  # 使用新的新生儿多标签数据集类型
+  type: neonatal_multilabel # 使用新的新生儿多标签数据集类型
   # root: /home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments  # 数据集根目录
-  num_workers: 12       # 减少工作进程数，避免CPU和内存过载
+  num_workers: 12 # 减少工作进程数，避免CPU和内存过载
   params:
-    clip_len: 32      # 每个视频片段的帧数
-    top_n_classes: 10  # 只使用样本数量前7多的类别，减少稀有类别干扰
-    stratified_split: true  # 启用分层抽样，确保训练测试集类别分布一致
-    min_samples_per_class: 10  # 类别最小样本数阈值
+    clip_len: 32 # 每个视频片段的帧数
+    top_n_classes: 10 # 只使用样本数量前7多的类别，减少稀有类别干扰
+    stratified_split: true # 启用分层抽样，确保训练测试集类别分布一致
+    min_samples_per_class: 10 # 类别最小样本数阈值
 
 # # 模型配置（仅保留必要的基础参数）
 # model:
@@ -82,50 +82,50 @@ grid_search:
     # - "exponential": 指数衰减，参数：gamma
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
-      hp.batch_size: [128]  # 使用更大的batch_size，128优先
-      hp.learning_rate: [0.001]  # 提高学习率，加快收敛
+      hp.batch_size: [36] # 降低batch_size以减少内存占用和I/O压力(多卡训练时全局batch=64)
+      hp.learning_rate: [0.001] # 提高学习率，加快收敛
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.01]
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
-      loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
-      loss.params.pos_weight: [10.0]  # 正样本权重，处理类别不平衡
-      
+      scheduler.name: ["warmup_cosine"] # 🔧 增加更多调度器选项
+      scheduler.params.warmup_epochs: [2] # 🔧 增加Warmup期长度：2个epoch
+      scheduler.params.warmup_start_factor: [1] # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.05] # 🔧 调整最小学习率：30%或50%（原来1%太低）
+      scheduler.params.step_size: [3] # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.9] # 🔧 更温和的学习率衰减因子
+      loss.name: ["focal_multilabel_bce"] # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
+      loss.params.pos_weight: [10.0] # 正样本权重，处理类别不平衡
+
     # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     transformer_models:
       model.type: ["mvit_v1_b", "mvit_v2_s"]
-      hp.batch_size: [36, 32]  # 按顺序配对：mvit_v1_b用36，mvit_v2_s用32
-      hp.learning_rate: [0.001]  # 降低学习率，更稳定
-      optimizer.name: ["adamw"]  # Transformer首选AdamW
-      optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
-      loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
-      loss.params.pos_weight: [10.0, 20.0, 30.0]  # 正样本权重，处理类别不平衡
-    
+      hp.batch_size: [36, 32] # 按顺序配对：mvit_v1_b用36，mvit_v2_s用32
+      hp.learning_rate: [0.001] # 降低学习率，更稳定
+      optimizer.name: ["adamw"] # Transformer首选AdamW
+      optimizer.params.weight_decay: [0.05] # 适中的权重衰减
+      scheduler.name: ["warmup_cosine"] # 🔧 增加更多调度器选项
+      scheduler.params.warmup_epochs: [2] # 🔧 增加Warmup期长度：2个epoch
+      scheduler.params.warmup_start_factor: [1] # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.05] # 🔧 调整最小学习率：30%或50%（原来1%太低）
+      scheduler.params.step_size: [3] # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.9] # 🔧 更温和的学习率衰减因子
+      loss.name: ["focal_multilabel_bce"] # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
+      loss.params.pos_weight: [10.0, 20.0, 30.0] # 正样本权重，处理类别不平衡
+
     # Swin3D模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
     swin3d_models:
       model.type: ["swin3d_b", "swin3d_s", "swin3d_t"]
-      hp.batch_size: [16, 16, 16]  # 按顺序配对：swin3d_b用4，swin3d_s用8，swin3d_t用16
-      hp.learning_rate: [0.001]  # 保守的学习率
-      optimizer.name: ["adamw"]  # Swin系列推荐AdamW
-      optimizer.params.weight_decay: [0.05]  # Swin系列用更大的weight_decay
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
-      loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
-      loss.params.pos_weight: [10.0, 20.0, 30.0]  # 正样本权重，处理类别不平衡
+      hp.batch_size: [16, 16, 16] # 按顺序配对：swin3d_b用4，swin3d_s用8，swin3d_t用16
+      hp.learning_rate: [0.001] # 保守的学习率
+      optimizer.name: ["adamw"] # Swin系列推荐AdamW
+      optimizer.params.weight_decay: [0.05] # Swin系列用更大的weight_decay
+      scheduler.name: ["warmup_cosine"] # 🔧 增加更多调度器选项
+      scheduler.params.warmup_epochs: [2] # 🔧 增加Warmup期长度：2个epoch
+      scheduler.params.warmup_start_factor: [1] # Warmup起始学习率比例
+      scheduler.params.eta_min_factor: [0.05] # 🔧 调整最小学习率：30%或50%（原来1%太低）
+      scheduler.params.step_size: [3] # 每3或5个epoch降低学习率
+      scheduler.params.gamma: [0.9] # 🔧 更温和的学习率衰减因子
+      loss.name: ["focal_multilabel_bce"] # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
+      loss.params.pos_weight: [10.0, 20.0, 30.0] # 正样本权重，处理类别不平衡
 
 # 评估指标配置（暂时注释掉，使用默认指标）
 # metrics:

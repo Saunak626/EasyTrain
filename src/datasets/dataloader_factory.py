@@ -170,21 +170,30 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         # if is_main_process():
         #     print(f"📊 使用完整数据集 - 训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} 样本")
 
+    # 根据分布式训练情况调整num_workers
+    # 在DDP模式下,每个GPU都会创建num_workers个worker,因此需要除以GPU数量
+    import os
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    adjusted_num_workers = max(1, num_workers // world_size) if world_size > 1 else num_workers
+
     # 创建数据加载器
+    loader_kwargs = dict(batch_size=batch_size, num_workers=adjusted_num_workers, pin_memory=True)
+    eval_loader_kwargs = loader_kwargs.copy()
+
+    if adjusted_num_workers > 0:
+        loader_kwargs.update(persistent_workers=True, prefetch_factor=1)
+        eval_loader_kwargs.update(persistent_workers=True, prefetch_factor=1)
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True
+        **loader_kwargs
     )
 
     test_loader = DataLoader(
         test_dataset,
-        batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
+        **eval_loader_kwargs
     )
 
     return train_loader, test_loader, num_classes

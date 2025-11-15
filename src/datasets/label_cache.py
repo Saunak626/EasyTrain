@@ -10,6 +10,11 @@ import logging
 from typing import Optional, Dict, Any
 import hashlib
 
+try:
+    import fcntl  # POSIX文件锁
+except ImportError:  # pragma: no cover - 非POSIX系统回退
+    fcntl = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,39 +35,96 @@ class LabelCache:
     
     @classmethod
     def get_labels_data(cls, labels_file: str, force_reload: bool = False) -> pd.DataFrame:
-        """获取标签数据
-        
+        """获取标签数据(支持磁盘持久化缓存,跨进程共享)
+
         Args:
             labels_file (str): 标签文件路径
             force_reload (bool): 是否强制重新加载
-            
+
         Returns:
             pd.DataFrame: 标签数据
         """
         cache_key = os.path.abspath(labels_file)
-        
+
+        # 生成持久化缓存文件路径
+        cache_file = labels_file.replace('.xlsx', '_cache.pkl').replace('.xls', '_cache.pkl')
+        lock_file = cache_file + '.lock'
+
         # 检查是否需要重新加载
         if force_reload or not cls._should_use_cache(cache_key, labels_file):
-            logger.info(f"加载标签文件: {labels_file}")
-            start_time = pd.Timestamp.now()
-            
-            # 读取Excel文件
-            df = pd.read_excel(labels_file)
-            
-            load_time = (pd.Timestamp.now() - start_time).total_seconds()
-            logger.info(f"标签文件加载完成: {len(df)} 行, 耗时 {load_time:.2f}秒")
-            
-            # 缓存数据和元信息
-            cls._cache_data[cache_key] = {
-                'data': df,
-                'file_mtime': os.path.getmtime(labels_file),
-                'file_size': os.path.getsize(labels_file),
-                'load_time': pd.Timestamp.now()
-            }
+            lock_handle = cls._acquire_lock(lock_file)
+            try:
+                # 加锁后再次尝试从磁盘缓存读取（避免竞争）
+                if (not force_reload and
+                        cls._is_disk_cache_valid(cache_file, labels_file)):
+                    df = cls._load_from_disk_cache(cache_file)
+                    cls._update_memory_cache(cache_key, labels_file, df)
+                    return df
+
+                # 从Excel文件读取
+                logger.info(f"加载标签文件: {labels_file}")
+                start_time = pd.Timestamp.now()
+                df = pd.read_excel(labels_file)
+                load_time = (pd.Timestamp.now() - start_time).total_seconds()
+                logger.info(f"标签文件加载完成: {len(df)} 行, 耗时 {load_time:.2f}秒")
+
+                # 保存到磁盘缓存
+                try:
+                    with open(cache_file, 'wb') as f:
+                        pickle.dump(df, f)
+                    logger.info(f"标签数据已缓存到磁盘: {cache_file}")
+                except Exception as e:
+                    logger.warning(f"保存磁盘缓存失败: {e}")
+
+                cls._update_memory_cache(cache_key, labels_file, df)
+            finally:
+                cls._release_lock(lock_handle)
         else:
-            logger.debug(f"使用缓存的标签数据: {cache_key}")
-        
+            logger.debug(f"使用内存缓存的标签数据: {cache_key}")
+
         return cls._cache_data[cache_key]['data']
+
+    @staticmethod
+    def _is_disk_cache_valid(cache_file: str, labels_file: str) -> bool:
+        return os.path.exists(cache_file) and os.path.getmtime(cache_file) >= os.path.getmtime(labels_file)
+
+    @classmethod
+    def _load_from_disk_cache(cls, cache_file: str) -> pd.DataFrame:
+        logger.info(f"从磁盘缓存加载标签数据: {cache_file}")
+        start_time = pd.Timestamp.now()
+        with open(cache_file, 'rb') as f:
+            df = pickle.load(f)
+        load_time = (pd.Timestamp.now() - start_time).total_seconds()
+        logger.info(f"磁盘缓存加载完成: {len(df)} 行, 耗时 {load_time:.2f}秒")
+        return df
+
+    @classmethod
+    def _update_memory_cache(cls, cache_key: str, labels_file: str, df: pd.DataFrame):
+        cls._cache_data[cache_key] = {
+            'data': df,
+            'file_mtime': os.path.getmtime(labels_file),
+            'file_size': os.path.getsize(labels_file),
+            'load_time': pd.Timestamp.now()
+        }
+
+    @staticmethod
+    def _acquire_lock(lock_file: str):
+        if fcntl is None:
+            return None
+        lock_dir = os.path.dirname(lock_file) or '.'
+        os.makedirs(lock_dir, exist_ok=True)
+        handle = open(lock_file, 'w')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        return handle
+
+    @staticmethod
+    def _release_lock(handle):
+        if handle is None:
+            return
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            handle.close()
     
     @classmethod
     def _should_use_cache(cls, cache_key: str, labels_file: str) -> bool:

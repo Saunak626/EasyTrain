@@ -264,10 +264,14 @@ class NeonatalMultilabelDataset(Dataset):
             if sum(label_vector) == 0:
                 continue
             
+            # 缓存帧路径列表,避免每次__getitem__时重复扫描目录
+            frame_paths = sorted([os.path.join(clip_dir, f) for f in frame_files])
+
             sample = {
                 'session_name': session_name,
                 'clip_id': clip_id,
                 'frames_dir': clip_dir,
+                'frame_paths': frame_paths,  # 新增:缓存帧路径
                 'labels': label_vector,
                 'start_time': row.get('开始时间(秒)', 0),
                 'end_time': row.get('结束时间(秒)', 0),
@@ -488,9 +492,14 @@ class NeonatalMultilabelDataset(Dataset):
     def __getitem__(self, index):
         """获取单个样本"""
         sample = self.samples[index]
-        
-        # 加载视频帧
-        buffer = self.load_frames(sample['frames_dir'])
+
+        # 加载视频帧(优先使用缓存的帧路径,避免重复目录扫描)
+        frame_paths = sample.get('frame_paths', None)
+        if frame_paths is not None:
+            buffer = self.load_frames(frame_paths)
+        else:
+            # 兼容旧代码:如果没有缓存路径,使用目录路径
+            buffer = self.load_frames(sample['frames_dir'])
         
         # 如果有模型特定的transforms，使用官方transforms
         if self.model_transforms is not None:
@@ -539,14 +548,23 @@ class NeonatalMultilabelDataset(Dataset):
         # 返回torch格式的特征和标签
         return buffer, labels
     
-    def load_frames(self, frames_dir):
-        """从目录中加载视频帧（优化版本，减少内存占用和加载时间）"""
-        frame_paths = sorted([os.path.join(frames_dir, img)
-                             for img in os.listdir(frames_dir) if img.endswith('.jpg')])
+    def load_frames(self, frame_paths_or_dir):
+        """从目录或路径列表中加载视频帧（优化版本，减少内存占用和加载时间）
+
+        Args:
+            frame_paths_or_dir: 帧路径列表(优先)或帧目录路径(兼容旧代码)
+        """
+        # 兼容性处理:如果传入的是目录路径,则扫描目录
+        if isinstance(frame_paths_or_dir, str):
+            frame_paths = sorted([os.path.join(frame_paths_or_dir, img)
+                                 for img in os.listdir(frame_paths_or_dir) if img.endswith('.jpg')])
+        else:
+            frame_paths = frame_paths_or_dir
+
         frame_count = len(frame_paths)
 
         if frame_count == 0:
-            raise ValueError(f"没有找到帧图像文件: {frames_dir}")
+            raise ValueError(f"没有找到帧图像文件")
 
         # 限制最大帧数，避免内存过载
         max_frames = 60  # 限制最大帧数
@@ -566,13 +584,13 @@ class NeonatalMultilabelDataset(Dataset):
         # 预处理尺寸，减少内存占用
         target_height, target_width = 224, 224  # 标准尺寸
 
-        # 根据目标尺寸创建缓冲区
-        buffer = np.empty((frame_count, target_height, target_width, 3), dtype=np.float32)
+        # 优化:使用uint8 buffer,延迟float32转换,减少4倍内存占用
+        buffer = np.empty((frame_count, target_height, target_width, 3), dtype=np.uint8)
 
         # 处理第一帧
         if (actual_height, actual_width) != (target_height, target_width):
             first_frame = cv2.resize(first_frame, (target_width, target_height))
-        buffer[0] = first_frame.astype(np.float32)  # 直接使用float32
+        buffer[0] = first_frame  # 保持uint8
 
         # 批量加载剩余帧
         for i, frame_name in enumerate(frame_paths[1:], 1):
@@ -584,9 +602,10 @@ class NeonatalMultilabelDataset(Dataset):
             if frame.shape[:2] != (target_height, target_width):
                 frame = cv2.resize(frame, (target_width, target_height))
 
-            buffer[i] = frame.astype(np.float32)
+            buffer[i] = frame  # 保持uint8
 
-        return buffer
+        # 在返回前转换为float32(在crop和transform之前)
+        return buffer.astype(np.float32)
     
     def crop(self, buffer, clip_len, crop_size):
         """对视频帧进行时间和空间裁剪（适应不同输入尺寸）"""

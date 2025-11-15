@@ -1017,25 +1017,9 @@ def run_single_experiment_in_process(params, exp_id, config_path):
 def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path):
     """子进程方式运行单个实验（多卡训练）"""
     exp_name = f"grid_{exp_id}"
-    
+
     # 创建临时结果文件用于进程间通信
     temp_result_file = f"/tmp/grid_result_{exp_id}_{random.randint(1000,9999)}.json"
-    
-    # 组装命令
-    if use_multi_gpu:
-        import torch  # 局部导入，仅在需要时使用
-        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(torch.cuda.device_count())]
-    else:
-        cmd = [sys.executable, "-u"]
-    
-    # 添加训练脚本和基础参数
-    cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
-    cmd.extend(["--result_file", temp_result_file])  # 新增：指定结果文件
-    
-    # 添加参数覆盖（排除group参数，它只用于记录）
-    for k, v in (params or {}).items():
-        if k != "group":  # group参数不传递给训练脚本
-            cmd.extend([f"--{k}", str(v)])
 
     # 清理环境变量并设置唯一端口
     env = os.environ.copy()
@@ -1043,6 +1027,32 @@ def run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
         env.pop(k, None)
     env["MASTER_ADDR"] = env.get("MASTER_ADDR", "127.0.0.1")
     env["MASTER_PORT"] = str(20000 + random.randint(0, 10000))
+
+    # 组装命令
+    if use_multi_gpu:
+        # 从配置文件读取GPU设置
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+
+        # 获取GPU配置并设置环境变量
+        gpu_ids = config.get('gpu', {}).get('device_ids', '0')
+        env['CUDA_VISIBLE_DEVICES'] = str(gpu_ids)
+
+        # 计算可见GPU数量
+        num_gpus = len(str(gpu_ids).split(','))
+        cmd = ["accelerate", "launch", "--multi_gpu", "--num_processes", str(num_gpus)]
+    else:
+        cmd = [sys.executable, "-u"]
+
+    # 添加训练脚本和基础参数
+    cmd.extend(["scripts/train.py", "--config", config_path, "--exp_name", exp_name])
+    cmd.extend(["--result_file", temp_result_file])  # 新增：指定结果文件
+
+    # 添加参数覆盖（排除group参数，它只用于记录）
+    for k, v in (params or {}).items():
+        if k != "group":  # group参数不传递给训练脚本
+            cmd.extend([f"--{k}", str(v)])
 
     # 启动子进程
     process = subprocess.Popen(cmd, env=env)

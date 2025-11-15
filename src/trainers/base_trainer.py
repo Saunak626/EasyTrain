@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from typing import Dict, Any, Tuple, Optional
+from numbers import Number
 
 from tqdm import tqdm
 from accelerate import Accelerator
@@ -56,6 +57,16 @@ SUPPORTED_TASKS = {
         'default_model': 'r3d_18'
     }
 }
+
+
+def resolve_base_dataset(dataset):
+    """递归获取真实数据集对象(兼容Subset/Wrapper)"""
+    base = dataset
+    max_depth = 10
+    while hasattr(base, 'dataset') and max_depth > 0:
+        base = base.dataset
+        max_depth -= 1
+    return base
 
 # ============================================================================
 # 进度条管理类
@@ -204,21 +215,15 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
         total_loss += loss.item()
         num_batches += 1
 
-        # 🔧 新增：收集预测和目标数据（用于训练集指标计算）
+        # 🔧 优化：每个进程本地收集预测,在epoch结束统一聚合
         if is_multilabel:
-            # 收集预测概率和目标标签
-            gathered_outputs = accelerator.gather(outputs)
-            gathered_targets = accelerator.gather(targets)
+            probs = torch.sigmoid(outputs).detach()
+            all_predictions.append(probs)
+            all_targets.append(targets.detach())
 
-            if accelerator.is_main_process:
-                # 🔧 修复：应用sigmoid获取概率，并正确处理梯度
-                probs = torch.sigmoid(gathered_outputs).detach().cpu().numpy()
-                targets_np = gathered_targets.detach().cpu().numpy()
-
-                all_predictions.append(probs)
-                all_targets.append(targets_np)
-
-        accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
+        # 降低日志频率,每10个batch记录一次
+        if batch_idx % 10 == 0:
+            accelerator.log({"train/loss": loss.item(), "epoch_num": epoch})
 
         # 更新进度条
         if progress_bar and batch_idx % TRAINING_CONSTANTS['progress_update_interval'] == 0:
@@ -241,41 +246,47 @@ def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator
 
     # 🔧 新增：计算训练集指标（如果是多标签任务）
     train_accuracy = 0.0
-    if is_multilabel and all_predictions and accelerator.is_main_process:
-        # 合并所有批次的预测和目标
-        all_pred_array = np.concatenate(all_predictions, axis=0)
-        all_target_array = np.concatenate(all_targets, axis=0)
+    if is_multilabel and all_predictions:
+        local_pred_tensor = torch.cat(all_predictions, dim=0)
+        local_target_tensor = torch.cat(all_targets, dim=0)
 
-        # 计算训练集详细指标
-        train_metrics = metrics_calculator.calculate_detailed_metrics(
-            all_pred_array, all_target_array, threshold=0.5
-        )
+        global_pred = accelerator.gather_for_metrics(local_pred_tensor)
+        global_target = accelerator.gather_for_metrics(local_target_tensor)
 
-        # 保存训练集指标到单独的CSV文件
-        metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
+        if accelerator.is_main_process:
+            all_pred_array = global_pred.cpu().numpy()
+            all_target_array = global_target.cpu().numpy()
 
-        # 记录训练集指标到SwanLab
-        accelerator.log({
-            "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
-            "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
-            "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
-            "train/macro_f1": train_metrics['macro_avg']['f1'],
-            "train/micro_f1": train_metrics['micro_avg']['f1'],
-            "train/weighted_f1": train_metrics['weighted_avg']['f1'],
-            "train/macro_precision": train_metrics['macro_avg']['precision'],
-            "train/macro_recall": train_metrics['macro_avg']['recall']
-        }, step=epoch)
+            # 计算训练集详细指标
+            train_metrics = metrics_calculator.calculate_detailed_metrics(
+                all_pred_array, all_target_array, threshold=0.5
+            )
 
-        # 🔧 新增：记录每个类别的训练指标到SwanLab
-        for class_name, class_metrics in train_metrics['class_metrics'].items():
+            # 保存训练集指标到单独的CSV文件
+            metrics_calculator.save_train_metrics(train_metrics, epoch, avg_train_loss)
+
+            # 记录训练集指标到SwanLab
             accelerator.log({
-                f"train_class/{class_name}/f1": class_metrics['f1'],
-                f"train_class/{class_name}/precision": class_metrics['precision'],
-                f"train_class/{class_name}/recall": class_metrics['recall'],
-                f"train_class/{class_name}/accuracy": class_metrics['accuracy']
+                "train/macro_accuracy": train_metrics['macro_avg']['accuracy'],
+                "train/micro_accuracy": train_metrics['micro_avg']['accuracy'],
+                "train/weighted_accuracy": train_metrics['weighted_avg']['accuracy'],
+                "train/macro_f1": train_metrics['macro_avg']['f1'],
+                "train/micro_f1": train_metrics['micro_avg']['f1'],
+                "train/weighted_f1": train_metrics['weighted_avg']['f1'],
+                "train/macro_precision": train_metrics['macro_avg']['precision'],
+                "train/macro_recall": train_metrics['macro_avg']['recall']
             }, step=epoch)
 
-        train_accuracy = train_metrics['macro_avg']['accuracy']
+            # 🔧 新增：记录每个类别的训练指标到SwanLab
+            for class_name, class_metrics in train_metrics['class_metrics'].items():
+                accelerator.log({
+                    f"train_class/{class_name}/f1": class_metrics['f1'],
+                    f"train_class/{class_name}/precision": class_metrics['precision'],
+                    f"train_class/{class_name}/recall": class_metrics['recall'],
+                    f"train_class/{class_name}/accuracy": class_metrics['accuracy']
+                }, step=epoch)
+
+            train_accuracy = train_metrics['macro_avg']['accuracy']
 
     return avg_train_loss, train_accuracy
 
@@ -387,9 +398,21 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
 
         # 如果有多标签指标计算器且收集了数据，进行详细评估
         if metrics_calculator is not None and all_predictions and is_multilabel:
-            # 合并所有批次的预测和目标
-            all_pred_array = np.concatenate(all_predictions, axis=0)
-            all_target_array = np.concatenate(all_targets, axis=0)
+            # 先在本地合并所有批次的预测和目标
+            local_pred_array = np.concatenate(all_predictions, axis=0)
+            local_target_array = np.concatenate(all_targets, axis=0)
+
+            # 转换为tensor并跨所有GPU汇总数据
+            local_pred_tensor = torch.from_numpy(local_pred_array).to(accelerator.device)
+            local_target_tensor = torch.from_numpy(local_target_array).to(accelerator.device)
+
+            # 使用gather_for_metrics汇总所有GPU的预测和标签
+            all_pred_tensor = accelerator.gather_for_metrics(local_pred_tensor)
+            all_target_tensor = accelerator.gather_for_metrics(local_target_tensor)
+
+            # 转换回numpy进行指标计算
+            all_pred_array = all_pred_tensor.cpu().numpy()
+            all_target_array = all_target_tensor.cpu().numpy()
 
             # 计算详细指标
             detailed_metrics = metrics_calculator.calculate_detailed_metrics(
@@ -556,9 +579,13 @@ def setup_data_and_model(config: Dict[str, Any], task_info: Dict[str, Any], data
     dataset_info = get_dataset_info(dataset_type)
     dataset_info['num_classes'] = num_classes or dataset_info['num_classes']
 
+    base_dataset = resolve_base_dataset(train_dataloader.dataset)
+    if hasattr(base_dataset, 'get_num_classes'):
+        dataset_info['num_classes'] = base_dataset.get_num_classes()
+
     # 对于多标签数据集，从实际数据集实例获取类别名称
-    if dataset_type == 'neonatal_multilabel' and hasattr(train_dataloader.dataset, 'get_class_names'):
-        dataset_info['classes'] = train_dataloader.dataset.get_class_names()
+    if dataset_type == 'neonatal_multilabel' and hasattr(base_dataset, 'get_class_names'):
+        dataset_info['classes'] = base_dataset.get_class_names()
         dataset_info['num_classes'] = len(dataset_info['classes'])
 
     # 基于任务类型创建模型
@@ -592,6 +619,7 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
         Tuple[损失函数, 优化器, 学习率调度器]
     """
     hyperparams = config['hp']
+    base_dataset = resolve_base_dataset(train_dataloader.dataset)
 
     # 创建损失函数 - 使用工厂函数，传递类别数量信息
     loss_config = config.get('loss', {}).copy()
@@ -607,8 +635,8 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
     loss_name = loss_config.get('name') or loss_config.get('type')
     if loss_name in multilabel_loss_types:
         # 从数据集获取实际的类别数量
-        if hasattr(train_dataloader.dataset, 'get_num_classes'):
-            num_classes = train_dataloader.dataset.get_num_classes()
+        if hasattr(base_dataset, 'get_num_classes'):
+            num_classes = base_dataset.get_num_classes()
         else:
             # 从模型配置获取类别数量（向后兼容）
             num_classes = config.get('model', {}).get('params', {}).get('num_classes', 24)
@@ -617,10 +645,30 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader, a
             loss_config['params'] = {}
         loss_config['params']['num_classes'] = num_classes
 
+        # 校正pos_weight长度,避免类别数不匹配
+        pos_weight = loss_config['params'].get('pos_weight')
+        if pos_weight is not None:
+            if isinstance(pos_weight, Number):
+                pos_weight_list = [float(pos_weight)] * num_classes
+            elif isinstance(pos_weight, (list, tuple)):
+                pos_weight_list = list(pos_weight)
+            else:
+                pos_weight_list = pos_weight
+
+            if isinstance(pos_weight_list, list):
+                if len(pos_weight_list) < num_classes:
+                    fill_value = pos_weight_list[-1] if pos_weight_list else 1.0
+                    pos_weight_list.extend([fill_value] * (num_classes - len(pos_weight_list)))
+                elif len(pos_weight_list) > num_classes:
+                    pos_weight_list = pos_weight_list[:num_classes]
+                loss_config['params']['pos_weight'] = pos_weight_list
+
         # 🔧 调试信息：确认参数传递
+        dataset_class_count = base_dataset.get_num_classes() if hasattr(base_dataset, 'get_num_classes') else '未知'
+        dataset_class_names = base_dataset.get_class_names() if hasattr(base_dataset, 'get_class_names') else '未知'
         print(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
-        print(f"   数据集类别数: {train_dataloader.dataset.get_num_classes() if hasattr(train_dataloader.dataset, 'get_num_classes') else '未知'}")
-        print(f"   数据集类别名: {train_dataloader.dataset.get_class_names() if hasattr(train_dataloader.dataset, 'get_class_names') else '未知'}")
+        print(f"   数据集类别数: {dataset_class_count}")
+        print(f"   数据集类别名: {dataset_class_names}")
 
     loss_fn = get_loss_function(loss_config)
 

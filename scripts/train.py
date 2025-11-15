@@ -10,12 +10,23 @@
 
 import sys
 import os
+import subprocess
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config_parser import parse_arguments  # 参数解析器
 from src.trainers.base_trainer import run_training   # 核心训练函数
+
+
+def _should_launch_with_accelerate(args, config):
+    """判断是否需要通过Accelerate重新拉起进程"""
+    multi_gpu_enabled = bool(args.multi_gpu or config.get('multi_gpu', {}).get('enabled'))
+    already_launched = (
+        os.environ.get("ACCELERATE_PROCESS_INDEX") is not None or
+        os.environ.get("LOCAL_RANK") is not None
+    )
+    return multi_gpu_enabled and not already_launched
 
 def main():
     """单实验训练主函数
@@ -26,6 +37,23 @@ def main():
         int: 退出码，0表示成功
     """
     args, config = parse_arguments(mode='single_experiment')
+
+    if _should_launch_with_accelerate(args, config):
+        gpu_ids = str(config.get('gpu', {}).get('device_ids', os.environ.get('CUDA_VISIBLE_DEVICES', '0')))
+        visible_ids = [gid.strip() for gid in gpu_ids.split(',') if gid.strip()]
+        num_gpus = max(1, len(visible_ids))
+
+        env = os.environ.copy()
+        env['CUDA_VISIBLE_DEVICES'] = ','.join(visible_ids)
+
+        cmd = [
+            "accelerate", "launch", "--multi_gpu", "--num_processes", str(num_gpus),
+            os.path.abspath(__file__)
+        ]
+        cmd.extend(sys.argv[1:])
+
+        return subprocess.call(cmd, env=env)
+
     exp_name = config['training']['exp_name']
     result = run_training(config, exp_name)
 

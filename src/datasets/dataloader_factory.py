@@ -107,8 +107,11 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         original_fps = kwargs.get('original_fps', 16)
 
         # 数据路径
-        frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
-        labels_file = "/home/swq/Code/Neonate-Feeding-Assessment/result_xlsx/latest/multi_hot_labels.xlsx"
+        # frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed/frames_segments"
+        # labels_file = "/home/swq/Code/Neonate-Feeding-Assessment/result_xlsx/latest/multi_hot_labels.xlsx"
+
+        frames_dir = "/home/swq/Code/Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments"
+        labels_file = "/home/swq/Code/Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx"
 
         train_dataset = NeonatalMultilabelDataset(
             frames_dir=frames_dir,

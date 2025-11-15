@@ -8,6 +8,7 @@ commit/
 swanlog/
 runs/
 tmp/
+.vscode/
 
 # 无用文件
 *.pyc

@@ -11,12 +11,9 @@
 1. 命令行参数（最高优先级）
    - 直接参数：--learning_rate, --batch_size, --epochs 等
    - 嵌套参数：--model.type, --optimizer.name 等
-2. 网格搜索配置（中等优先级）
-   - grid_search.grid 中定义的参数组合
-   - 仅在单实验模式下作为默认值使用
-3. YAML配置文件（基础优先级）
+2. YAML配置文件（基础优先级）
    - 配置文件中的 hp, model, optimizer 等节点
-4. 代码默认值（最低优先级）
+3. 代码默认值（最低优先级）
    - 各模块中定义的默认参数值
 
 模型参数命名规范：
@@ -27,7 +24,7 @@
 核心功能：
 - 解析命令行参数和YAML配置文件
 - 处理嵌套配置参数的覆盖逻辑
-- 为网格搜索提供参数组合支持
+- 为网格搜索和单实验提供统一的配置入口
 - 管理GPU设备分配和环境变量
 """
 import argparse
@@ -41,21 +38,6 @@ from typing import Dict, List, Tuple, Any, Optional
 
 # 基础超参数映射：(命令行参数名, HP配置键名)
 BASIC_PARAM_MAPPINGS: List[Tuple[str, str]] = [
-    ("learning_rate", "learning_rate"),
-    ("batch_size", "batch_size"),
-    ("epochs", "epochs"),
-    ("dropout", "dropout"),
-    ("data_percentage", "data_percentage"),
-]
-
-# 网格搜索参数映射：(网格配置键名, HP配置键名)
-GRID_PARAM_MAPPINGS: List[Tuple[str, str]] = [
-    ("hp.learning_rate", "learning_rate"),
-    ("hp.batch_size", "batch_size"),
-    ("hp.epochs", "epochs"),
-    ("hp.dropout", "dropout"),
-    ("hp.data_percentage", "data_percentage"),
-    # 兼容旧格式
     ("learning_rate", "learning_rate"),
     ("batch_size", "batch_size"),
     ("epochs", "epochs"),
@@ -133,25 +115,6 @@ def setup_gpu_config(config: Optional[Dict[str, Any]]) -> None:
 # ============================================================================
 # 参数处理函数：职责分离的配置处理逻辑
 # ============================================================================
-
-def apply_grid_defaults_to_hp(config: Dict[str, Any], hp: Dict[str, Any]) -> None:
-    """从网格搜索配置中提取默认值到hp节点（仅单实验模式）
-
-    在单实验模式下，如果网格搜索配置中定义了参数列表，
-    则使用列表的第一个值作为默认值填充到hp节点中。
-
-    Args:
-        config: 完整配置字典
-        hp: hp节点的引用
-    """
-    if "grid_search" not in config or "grid" not in config["grid_search"]:
-        return
-
-    grid = config["grid_search"]["grid"]
-
-    for grid_key, hp_key in GRID_PARAM_MAPPINGS:
-        if grid_key in grid and isinstance(grid[grid_key], list) and hp_key not in hp:
-            hp[hp_key] = grid[grid_key][0]
 
 
 def apply_command_line_overrides(args: argparse.Namespace, hp: Dict[str, Any]) -> None:
@@ -372,7 +335,7 @@ def apply_parameter_overrides(config: Dict[str, Any], args: argparse.Namespace, 
     """应用命令行参数覆盖配置文件设置
 
     使用分离的函数处理不同类型的参数覆盖，提高代码的可读性和可维护性。
-    处理顺序：确保hp节点 -> 网格默认值 -> 命令行覆盖 -> 嵌套参数 -> 模式特定配置
+    处理顺序：确保hp节点 -> 命令行覆盖 -> 嵌套参数 -> FPS采样简化参数 -> 模式特定配置
 
     Args:
         config: 原始配置字典
@@ -385,20 +348,16 @@ def apply_parameter_overrides(config: Dict[str, Any], args: argparse.Namespace, 
     # 1. 确保hp节点存在
     hp = ensure_hp_section(config)
 
-    # 2. 单实验模式：从网格配置中提取默认值
-    if mode == "single_experiment":
-        apply_grid_defaults_to_hp(config, hp)
-
-    # 3. 应用命令行参数覆盖到hp节点
+    # 2. 应用命令行参数覆盖到hp节点
     apply_command_line_overrides(args, hp)
 
-    # 4. 处理嵌套参数（点号分隔）
+    # 3. 处理嵌套参数（点号分隔）
     apply_nested_parameter_overrides(config, args)
 
-    # 5. 处理FPS采样简化参数
+    # 4. 处理FPS采样简化参数
     apply_fps_sampling_overrides(config, args)
 
-    # 6. 应用模式特定的配置
+    # 5. 应用模式特定的配置
     if mode == "single_experiment":
         apply_single_experiment_configs(config, args)
 

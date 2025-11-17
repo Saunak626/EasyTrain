@@ -61,17 +61,14 @@ models_to_train:
   # - "swin3d_s"
   # - "swin3d_t"
 
-# ============================================================================
-# 网格搜索配置（唯一的网格搜索空间定义）
-# ============================================================================
-# 说明：
-# 1. 网格搜索空间：通过 grid_search.groups 定义，每组模型有自己的超参数搜索范围
-# 2. 网格搜索控制参数（如 max_experiments, save_results 等）通过命令行传递：
-#    python scripts/grid_search_unified.py --config config/ucf101_video_grid.yaml \
-#           --max_experiments 100 --save_results --top_n 10
-# 3. 固定参数（可选）：可通过 grid_search.fixed 定义在所有组合中保持不变的参数
-# ============================================================================
+# 网格搜索设置
+max_experiments: 100
+continue_on_error: true
+parallel_jobs: 1
+save_results: true
+# results_file: "video_grid_search_results.csv"  # 注释掉以使用时间戳文件名
 
+# 网格搜索超参数 - 分组式配置
 grid_search:
   # 分组式搜索：每组模型有自己的超参数搜索范围
   groups:

@@ -791,26 +791,17 @@ class ExperimentResultsManager:
                 else:
                     print(f"⚠️ 指标文件不存在: {source_file}")
 
-            # 🔧 修改：视频级别指标文件现在直接创建在grid_search_dir中，不需要拷贝
-            # 只需要拷贝best_metrics_summary.csv（如果存在）
-            params = result.get('params', {})
-            model_type = params.get('model.type', '')
-            exp_name = result.get('exp_name', '')
-            if model_type and exp_name:
-                extra_files = [
-                    "best_metrics_summary.csv",
-                ]
-
-                for filename in extra_files:
-                    source_file = os.path.join(source_dir, filename)
-                    target_file = os.path.join(exp_dir, filename)
-
-                    if os.path.exists(source_file):
-                        try:
-                            shutil.copy2(source_file, target_file)
-                            print(f"📋 已复制额外指标文件: {filename}")
-                        except Exception as e:
-                            print(f"⚠️ 复制额外指标文件失败 ({filename}): {e}")
+            # 视频级别指标文件现在直接创建在grid_search_dir中，不需要拷贝
+            # 只拷贝best_metrics_summary.csv（如果存在）
+            extra_files = ["best_metrics_summary.csv"]
+            for filename in extra_files:
+                source_file = os.path.join(source_dir, filename)
+                target_file = os.path.join(exp_dir, filename)
+                if os.path.exists(source_file):
+                    try:
+                        shutil.copy2(source_file, target_file)
+                    except Exception as e:
+                        print(f"⚠️ 复制文件失败 ({filename}): {e}")
 
     def _save_best_metrics_summary(self, exp_dir: str, detailed_metrics: Dict[str, Any]) -> None:
         """保存最佳指标汇总文件"""
@@ -1013,39 +1004,24 @@ def run_single_experiment_in_process(params, exp_id, config_path, grid_search_di
     exp_name = f"grid_{exp_id}"
 
     try:
-        # 导入训练函数和GPU配置函数
         from src.trainers.base_trainer import run_training
         from src.utils.config_parser import setup_gpu_config
 
-        # 加载基础配置
         config = load_grid_config(config_path)
-
-        # 应用参数覆盖
         config = apply_param_overrides(config, params)
 
-        # 🔧 新增：将grid_search_dir添加到配置中，用于视频级别指标文件的保存
+        # 将grid_search_dir添加到配置中
         if grid_search_dir:
             config['grid_search_dir'] = grid_search_dir
 
-        # 配置GPU环境（重要：必须在训练前设置）
         setup_gpu_config(config)
-
-        # 直接调用训练函数
         result = run_training(config, exp_name)
-
-        # 添加参数信息到结果中
         result["params"] = params
 
         return result
 
     except Exception as e:
-        import traceback
-        print(f"❌ 实验 {exp_name} 发生异常:")
-        print(f"   错误类型: {type(e).__name__}")
-        print(f"   错误信息: {str(e)}")
-        print(f"   完整堆栈:")
-        traceback.print_exc()
-
+        print(f"❌ 实验 {exp_name} 失败: {type(e).__name__}: {str(e)}")
         return {
             "success": False,
             "exp_name": exp_name,
@@ -1156,19 +1132,11 @@ def run_single_experiment(params, exp_id, use_multi_gpu=False, config_path="conf
     Returns:
         dict: 实验结果字典
     """
-    exp_name = f"grid_{exp_id}"
-
-    # 实验信息将在训练器中的SwanLab启动后显示
-
     if use_multi_gpu:
-        # 多卡训练：使用子进程方式
-        # 注意：多GPU模式暂不支持grid_search_dir传递（需要通过命令行参数实现）
+        # 多GPU模式暂不支持grid_search_dir传递
         result = run_single_experiment_subprocess(params, exp_id, use_multi_gpu, config_path)
     else:
-        # 单卡训练：使用进程内调用方式
         result = run_single_experiment_in_process(params, exp_id, config_path, grid_search_dir)
-
-    print(f"✅ 实验 {exp_name} 完成，最佳: {result['best_accuracy']:.2f}% | 最终: {result['final_accuracy']:.2f}%")
 
     return result
 
@@ -1260,23 +1228,16 @@ def run_grid_search(args):
     successful = 0
 
     for i, params in enumerate(combinations, 1):
-        exp_name = f"grid_{i:03d}"
-
-        print(f"📊 准备实验 {i}/{len(combinations)}")
-
         # 将命令行参数添加到实验参数中
         experiment_params = params.copy()
-        # 始终添加data_percentage参数到hp命名空间，确保CSV记录完整
         experiment_params['hp.data_percentage'] = data_percentage
-        # 同时添加到根级别用于CSV记录
         experiment_params['data_percentage'] = data_percentage
 
-        # 🔧 新增：传递grid_search_dir，使视频级别指标文件直接创建在网格搜索目录中
         result = run_single_experiment(
             experiment_params, f"{i:03d}",
             use_multi_gpu=args.multi_gpu,
             config_path=args.config,
-            grid_search_dir=grid_search_dir  # 传递网格搜索目录
+            grid_search_dir=grid_search_dir
         )
 
         results.append(result)

@@ -117,36 +117,6 @@ VIDEO_MODEL_TRANSFORMS_MAP = {
 }
 
 
-def debug_model_architecture(model, model_type, verbose=False):
-    """调试模型架构，输出关键信息
-
-    Args:
-        model: 模型实例
-        model_type (str): 模型类型
-        verbose (bool): 是否输出详细信息
-    """
-    if not verbose:
-        return
-
-    print(f"\n=== 调试模型架构: {model_type} ===")
-    print(f"模型类型: {type(model)}")
-
-    # 检查常见的分类头属性
-    attrs_to_check = ['fc', 'classifier', 'head', 'heads']
-    for attr in attrs_to_check:
-        if hasattr(model, attr):
-            attr_obj = getattr(model, attr)
-            print(f"✓ {attr}: {type(attr_obj)}")
-
-            # 如果是Sequential，检查内部结构
-            if isinstance(attr_obj, nn.Sequential):
-                for i, layer in enumerate(attr_obj):
-                    print(f"  [{i}]: {type(layer)}")
-        else:
-            print(f"✗ {attr}: 不存在")
-    print("=" * 40)
-
-
 def get_video_model_transforms(model_type):
     """获取视频模型的官方transforms
 
@@ -329,9 +299,6 @@ def create_model_unified(model_type, num_classes=10, pretrained=True, debug=Fals
         else:
             raise ValueError(f"不支持的视频模型类型: {model_type}。支持的模型: {list(VIDEO_MODEL_TRANSFORMS_MAP.keys())}")
 
-        # 调试模型架构（如果启用）
-        if debug:
-            debug_model_architecture(model, model_type, verbose=True)
 
         # 验证transforms兼容性（如果启用）
         if debug and model_type in VIDEO_MODEL_TRANSFORMS_MAP:

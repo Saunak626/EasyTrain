@@ -26,6 +26,8 @@ from src.schedules.scheduler_factory import get_scheduler      # 学习率调度
 from src.datasets import create_dataloaders, get_dataset_info  # 统一数据加载器工厂
 from src.utils.data_utils import set_seed
 from src.utils.training_logger import TrainingLogger           # 训练日志管理器
+from src.utils.dataset_utils import unwrap_subset_dataset, get_dataset_metadata  # 数据集工具函数
+from src.utils.training_utils import log_multilabel_metrics_to_swanlab, get_learning_rate_info  # 训练工具函数
 
 # ============================================================================
 # 模块级常量配置
@@ -116,143 +118,8 @@ class ProgressBarManager:
 
 
 # ============================================================================
-# 辅助函数
+# 核心训练函数
 # ============================================================================
-
-def is_main_process() -> bool:
-    """检查是否为主进程（用于避免重复输出）"""
-    return int(os.environ.get("LOCAL_RANK", 0)) == 0
-
-
-def get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr):
-    """获取学习率监控信息
-
-    Args:
-        optimizer: 优化器
-        lr_scheduler: 学习率调度器
-        scheduler_config: 调度器配置
-        initial_lr: 初始学习率
-
-    Returns:
-        dict: 包含学习率信息的字典
-    """
-    current_lr = optimizer.param_groups[0]['lr']
-    scheduler_name = scheduler_config.get('name', 'default')
-
-    return {
-        'initial_lr': initial_lr,
-        'current_lr': current_lr,
-        'scheduler_name': scheduler_name
-    }
-
-
-def unwrap_subset_dataset(dataset):
-    """解包 Subset 包装的数据集，返回原始数据集
-
-    当使用 data_percentage 参数时，数据集会被 torch.utils.data.Subset 包装。
-    此函数用于获取原始数据集实例，以便访问数据集的自定义方法（如 get_class_names）。
-
-    Args:
-        dataset: 可能被 Subset 包装的数据集
-
-    Returns:
-        原始数据集（如果是 Subset 则返回内部数据集，否则返回原数据集）
-    """
-    from torch.utils.data import Subset
-    if isinstance(dataset, Subset):
-        return dataset.dataset
-    return dataset
-
-
-def get_dataset_metadata(dataset, dataset_type: str) -> Dict[str, Any]:
-    """从数据集获取元数据（类别数量、类别名称等）
-
-    统一的数据集元数据获取接口，支持 Subset 包装的数据集。
-
-    Args:
-        dataset: 数据集实例（可能被 Subset 包装）
-        dataset_type: 数据集类型字符串（如 'neonatal_multilabel'）
-
-    Returns:
-        包含以下键的字典：
-        - 'num_classes': 类别数量（int 或 None）
-        - 'classes': 类别名称列表（list 或 None）
-        - 'is_multilabel': 是否为多标签任务（bool）
-    """
-    # 解包 Subset
-    actual_dataset = unwrap_subset_dataset(dataset)
-
-    metadata = {
-        'num_classes': None,
-        'classes': None,
-        'is_multilabel': False
-    }
-
-    # 检测是否为多标签任务
-    metadata['is_multilabel'] = 'multilabel' in dataset_type.lower()
-
-    # 获取类别数量
-    if hasattr(actual_dataset, 'get_num_classes'):
-        metadata['num_classes'] = actual_dataset.get_num_classes()
-
-    # 获取类别名称
-    if hasattr(actual_dataset, 'get_class_names'):
-        metadata['classes'] = actual_dataset.get_class_names()
-        # 如果有类别名称，优先使用其长度作为类别数量
-        if metadata['classes']:
-            metadata['num_classes'] = len(metadata['classes'])
-
-    return metadata
-
-
-def print_learning_rate_info(lr_info, epoch, total_epochs, phase="开始"):
-    """打印学习率信息
-
-    Args:
-        lr_info: 学习率信息字典
-        epoch: 当前epoch
-        total_epochs: 总epoch数
-        phase: 阶段描述（"开始" 或 "结束"）
-    """
-    print(f"📊 Epoch {epoch}/{total_epochs} {phase} | "
-          f"调度策略: {lr_info['scheduler_name']} | "
-          f"初始LR: {lr_info['initial_lr']:.6f} | "
-          f"当前LR: {lr_info['current_lr']:.6f}")
-
-
-def log_multilabel_metrics_to_swanlab(accelerator: Accelerator, metrics: Dict[str, Any],
-                                      prefix: str, epoch: int):
-    """记录多标签指标到SwanLab
-
-    统一处理多标签分类指标的日志记录，避免重复代码。
-
-    Args:
-        accelerator: Accelerator实例
-        metrics: 指标字典（包含 macro_avg, micro_avg, weighted_avg, class_metrics）
-        prefix: 日志前缀（'train' 或 'test'）
-        epoch: 当前epoch
-    """
-    # 记录平均指标
-    accelerator.log({
-        f"{prefix}/macro_accuracy": metrics['macro_avg']['accuracy'],
-        f"{prefix}/micro_accuracy": metrics['micro_avg']['accuracy'],
-        f"{prefix}/weighted_accuracy": metrics['weighted_avg']['accuracy'],
-        f"{prefix}/macro_f1": metrics['macro_avg']['f1'],
-        f"{prefix}/micro_f1": metrics['micro_avg']['f1'],
-        f"{prefix}/weighted_f1": metrics['weighted_avg']['f1'],
-        f"{prefix}/macro_precision": metrics['macro_avg']['precision'],
-        f"{prefix}/macro_recall": metrics['macro_avg']['recall']
-    }, step=epoch)
-
-    # 记录每个类别的指标
-    for class_name, class_metrics in metrics['class_metrics'].items():
-        accelerator.log({
-            f"{prefix}_class/{class_name}/f1": class_metrics['f1'],
-            f"{prefix}_class/{class_name}/precision": class_metrics['precision'],
-            f"{prefix}_class/{class_name}/recall": class_metrics['recall'],
-            f"{prefix}_class/{class_name}/accuracy": class_metrics['accuracy']
-        }, step=epoch)
-
 
 def train_epoch(dataloader, model, loss_fn, optimizer, lr_scheduler, accelerator, epoch,
                 metrics_calculator=None, scheduler_step_interval='batch'):
@@ -410,26 +277,19 @@ def test_epoch(dataloader, model, loss_fn, accelerator, epoch, train_batches=Non
 
             if is_multilabel:
                 # 多标签分类：使用每类别平均准确率
-                predictions = torch.sigmoid(outputs) > 0.5 # TODO:
+                sigmoid_outputs = torch.sigmoid(outputs)
+                predictions = sigmoid_outputs > 0.5
                 targets_bool = targets.bool()
 
                 # 收集预测和目标数据用于详细评估
                 if metrics_calculator is not None:
                     # 收集sigmoid概率和真实标签
-                    sigmoid_probs = torch.sigmoid(outputs)
-                    all_predictions.append(sigmoid_probs.cpu().numpy())
+                    all_predictions.append(sigmoid_outputs.cpu().numpy())
                     all_targets.append(targets.cpu().numpy())
 
                 # 计算每个类别的准确率，然后平均（宏平均）
-                class_accuracies = []
-                for class_idx in range(targets.shape[1]):
-                    class_pred = predictions[:, class_idx]
-                    class_target = targets_bool[:, class_idx]
-                    class_acc = (class_pred == class_target).float().mean()
-                    class_accuracies.append(class_acc)
-
-                # 宏平均准确率：每个类别准确率的平均值
-                macro_accuracy = torch.stack(class_accuracies).mean()
+                class_accuracies = (predictions == targets_bool).float().mean(dim=0)
+                macro_accuracy = class_accuracies.mean()
                 # 转换为正确样本数（用于兼容现有统计逻辑），确保类型为Long
                 correct = (macro_accuracy * batch_size).long()
             else:
@@ -692,10 +552,7 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader,
         # 如果配置中指定了pos_weight但是标量值，则根据训练集统计动态计算
         config_pos_weight = loss_config.get('params', {}).get('pos_weight', None)
         if config_pos_weight is not None and isinstance(config_pos_weight, (int, float)):
-            # 从训练集统计每个类别的正负样本比例
-            logger.debug(f"📊 检测到pos_weight配置为标量 {config_pos_weight}，开始动态计算每个类别的pos_weight...")
-
-            # 🔧 使用辅助函数解包 Subset 数据集
+            #  使用辅助函数解包 Subset 数据集
             dataset = unwrap_subset_dataset(train_dataloader.dataset)
 
             # 🔧 优化：直接从数据集的samples属性读取标签，避免加载图像数据
@@ -712,12 +569,8 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader,
                     elif not isinstance(labels, torch.Tensor):
                         labels = torch.tensor(labels, dtype=torch.float32)
                     all_labels.append(labels)
-
-                logger.debug(f"   ✅ 从数据集samples属性读取标签 (快速模式)")
             else:
                 # 降级方案：遍历DataLoader（较慢）
-                logger.debug(f"   ⚠️  数据集没有samples属性，遍历DataLoader读取标签 (较慢)...")
-
                 for batch_idx, (_, targets) in enumerate(train_dataloader):
                     all_labels.append(targets.cpu())
                     # 只采样部分数据以加快计算（最多1000个batch）
@@ -763,20 +616,8 @@ def setup_training_components(config: Dict[str, Any], model, train_dataloader,
 
                 loss_config['params']['pos_weight'] = pos_weight
 
-                # 打印摘要信息（简洁模式）
+                # 打印摘要信息
                 logger.print_pos_weight_summary(total_samples, num_classes)
-
-                # 打印详细信息（详细模式）
-                # 🔧 使用 dataset_info 中的类别名称（避免重复获取）
-                class_names = dataset_info.get('classes', None)
-                logger.print_pos_weight_details(
-                    pos_weight, pos_counts, neg_counts, raw_ratio, scale_factor, class_names
-                )
-
-        # 🔧 调试信息：确认参数传递（详细模式）
-        logger.debug(f"📊 损失函数 {loss_name} 自动设置 num_classes = {num_classes}")
-        logger.debug(f"   数据集类别数: {dataset_info.get('num_classes', '未知')}")
-        logger.debug(f"   数据集类别名: {dataset_info.get('classes', '未知')}")
 
     loss_fn = get_loss_function(loss_config)
 
@@ -834,81 +675,9 @@ def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
     return output_dir
 
 
-def print_experiment_info(config: Dict[str, Any], exp_name: str, task_info: Dict[str, Any],
-                         dataset_info: Dict[str, Any], model, train_dataloader, test_dataloader,
-                         accelerator: Accelerator, logger: TrainingLogger) -> None:
-    """实验信息打印
-
-    负责打印完整的实验配置信息，包括模型、数据、训练配置等。
-
-    Args:
-        config: 完整配置字典
-        exp_name: 实验名称
-        task_info: 任务信息字典
-        dataset_info: 数据集信息字典
-        model: 已创建的模型
-        train_dataloader: 训练数据加载器
-        test_dataloader: 测试数据加载器
-        accelerator: Accelerator实例
-        logger: 训练日志管理器
-    """
-    if not (accelerator.is_main_process and is_main_process()):
-        return
-
-    hyperparams = config['hp']
-    data_config = config.get('data', {})
-    model_config = config.get('model', {})
-    dataset_type = data_config.get('type', 'cifar10')
-    model_name = model_config.get('type', model_config.get('name', task_info['default_model']))
-
-    # 获取模型参数信息
-    total_params = sum(p.numel() for p in model.parameters())
-    model_size_mb = total_params * TRAINING_CONSTANTS['model_size_bytes_per_param'] / TRAINING_CONSTANTS['bytes_to_mb']
-
-    # 调度器信息
-    scheduler_config = config.get('scheduler', {})
-    scheduler_name = scheduler_config.get('name', 'default')
-    scheduler_params = []
-    if scheduler_name == 'warmup_cosine':
-        warmup_epochs = scheduler_config.get('params', {}).get('warmup_epochs', 1)
-        eta_min_factor = scheduler_config.get('params', {}).get('eta_min_factor', 0.01)
-        scheduler_params.append(f"warmup_epochs={warmup_epochs}")
-        scheduler_params.append(f"eta_min_factor={eta_min_factor}")
-
-    scheduler_info = f"{scheduler_name}"
-    if scheduler_params:
-        scheduler_info += f" ({', '.join(scheduler_params)})"
-
-    # 优化器信息
-    optimizer_name = config.get('optimizer', {}).get('name', 'adam')
-    weight_decay = config.get('optimizer', {}).get('params', {}).get('weight_decay', 0)
-
-    # 构建配置字典
-    config_dict = {
-        'exp_name': exp_name,
-        'model_name': model_name,
-        'dataset_type': dataset_type,
-        'task_description': task_info['description'],
-        'model_params_m': total_params / 1e6,
-        'model_size_mb': model_size_mb,
-        'train_size': len(train_dataloader.dataset),
-        'test_size': len(test_dataloader.dataset),
-        'data_percentage': hyperparams.get('data_percentage', 1.0),
-        'epochs': hyperparams['epochs'],
-        'batch_size': hyperparams['batch_size'],
-        'learning_rate': hyperparams['learning_rate'],
-        'scheduler_info': scheduler_info,
-        'optimizer_name': optimizer_name,
-        'weight_decay': weight_decay
-    }
-
-    # 使用日志管理器打印（根据模式选择详细程度）
-    logger.print_experiment_config(config_dict)
-
-
 def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, loss_fn,
-                     train_dataloader, test_dataloader, accelerator: Accelerator, metrics_calculator=None,
-                     scheduler_step_interval='batch') -> Tuple[float, float, int]:
+                     train_dataloader, test_dataloader, accelerator: Accelerator, logger: TrainingLogger,
+                     metrics_calculator=None, scheduler_step_interval='batch') -> Tuple[float, float, int]:
     """主训练循环
 
     负责执行完整的训练循环，包括训练和测试阶段。
@@ -922,7 +691,9 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
         train_dataloader: 已准备的训练数据加载器
         test_dataloader: 已准备的测试数据加载器
         accelerator: Accelerator实例
+        logger: 训练日志管理器
         metrics_calculator: 多标签指标计算器（可选）
+        scheduler_step_interval: 调度器步进间隔（'batch' 或 'epoch'）
 
     Returns:
         Tuple[最佳准确率, 最终准确率, 训练轮数]
@@ -943,7 +714,7 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
         if accelerator.is_main_process:
             # 打印epoch开始时的学习率信息
             lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
-            print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
+            logger.print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "开始")
 
         # 训练epoch（传递metrics_calculator用于训练集指标计算）
         train_loss, train_accuracy = train_epoch(
@@ -965,7 +736,7 @@ def run_training_loop(config: Dict[str, Any], model, optimizer, lr_scheduler, lo
         # 打印epoch结束时的学习率信息
         if accelerator.is_main_process:
             lr_info = get_learning_rate_info(optimizer, lr_scheduler, scheduler_config, initial_lr)
-            print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "结束")
+            logger.print_learning_rate_info(lr_info, epoch, hyperparams['epochs'], "结束")
 
         # 更新并记录最佳准确率
         if accelerator.is_main_process and val_accuracy > best_accuracy:
@@ -1097,9 +868,8 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
     # 第1步：实验环境初始化
     exp_name, task_info, task_tag, data_config, accelerator = setup_experiment(config, exp_name)
 
-    # 创建训练日志管理器（支持简洁/详细模式切换）
-    verbose = config.get('verbose', False)  # 默认使用简洁模式
-    logger = TrainingLogger(accelerator, verbose=verbose)
+    # 创建训练日志管理器
+    logger = TrainingLogger(accelerator)
 
     # 第2步：数据和模型初始化
     train_dataloader, test_dataloader, model, dataset_info = setup_data_and_model(config, task_info, data_config, accelerator)
@@ -1162,11 +932,11 @@ def run_training(config: Dict[str, Any], exp_name: Optional[str] = None) -> Dict
                 tqdm.write(f"⚠️ 多标签任务检测成功，但未获取到类别名称")
 
     # 第5步：打印实验信息
-    print_experiment_info(config, exp_name, task_info, dataset_info, model, train_dataloader, test_dataloader, accelerator, logger)
+    logger.print_experiment_info_full(config, exp_name, task_info, dataset_info, model, train_dataloader, test_dataloader)
 
     # 第6步：执行训练循环
     best_accuracy, val_accuracy, trained_epochs = run_training_loop(
-        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator, metrics_calculator, scheduler_step_interval
+        config, model, optimizer, lr_scheduler, loss_fn, train_dataloader, test_dataloader, accelerator, logger, metrics_calculator, scheduler_step_interval
     )
 
     # 第7步：清理和返回结果

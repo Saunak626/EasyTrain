@@ -183,6 +183,7 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
     dataset_name = dataset_name.lower()
     # 数据子采样比例（0-1），1.0表示使用全部数据
     data_percentage = float(kwargs.get('data_percentage', 1.0))
+    verbose = int(kwargs.get('verbose', 1))
 
     if dataset_name == "cifar10":
         # 创建CIFAR-10数据集
@@ -292,7 +293,8 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             min_samples_per_class=min_samples_per_class,
             sampling_mode=sampling_mode,
             target_fps=target_fps,
-            original_fps=original_fps
+            original_fps=original_fps,
+            verbose=verbose
         )
 
         test_dataset = NeonatalMultilabelDataset(
@@ -306,7 +308,8 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             min_samples_per_class=min_samples_per_class,
             sampling_mode=sampling_mode,
             target_fps=target_fps,
-            original_fps=original_fps
+            original_fps=original_fps,
+            verbose=verbose
         )
 
         num_classes = train_dataset.get_num_classes()
@@ -376,7 +379,7 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             sample_weights = calculate_sample_weights(
                 train_dataset,
                 mode=weighted_sampling_mode,
-                verbose=True
+                verbose=verbose >= 2
             )
 
             # 创建加权采样器

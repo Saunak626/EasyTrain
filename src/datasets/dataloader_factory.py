@@ -448,6 +448,11 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
             train_sampler = None
             train_shuffle = True
 
+    # 🔧 优化：添加persistent_workers和prefetch_factor以提升数据加载性能
+    # persistent_workers=True: 保持worker进程存活，避免每个epoch重新创建进程
+    # prefetch_factor=2: 每个worker预加载2个batch，减少GPU等待时间
+    use_persistent_workers = num_workers > 0  # 只有在使用多进程时才启用
+
     # 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
@@ -455,7 +460,9 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         shuffle=train_shuffle,
         sampler=train_sampler,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=use_persistent_workers,  # 🔧 新增
+        prefetch_factor=2 if num_workers > 0 else None  # 🔧 新增
     )
 
     test_loader = DataLoader(
@@ -463,7 +470,9 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=use_persistent_workers,  # 🔧 新增
+        prefetch_factor=2 if num_workers > 0 else None  # 🔧 新增
     )
 
     return train_loader, test_loader, num_classes

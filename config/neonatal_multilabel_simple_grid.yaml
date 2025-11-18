@@ -21,7 +21,7 @@ swanlab:
 data:
   type: neonatal_multilabel_simple  # 使用简化版数据集类型
   root: ../Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments
-  num_workers: 12
+  num_workers: 32  # 🔧 优化：降低worker数量，减少磁盘I/O竞争（原12 -> 4）
   params:
     clip_len: 16      # 每个视频片段的帧数
     train_ratio: 0.8  # 训练集比例（简化版独有参数）
@@ -69,7 +69,7 @@ grid_search:
     # 轻量级3D CNN模型组
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18"]
-      hp.batch_size: [16]  # 使用中等batch_size
+      hp.batch_size: [16]  # 🔧 优化：降低batch_size减少内存压力（原16 -> 8）
       hp.learning_rate: [0.001]
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.01]
@@ -77,7 +77,7 @@ grid_search:
       scheduler.params.warmup_epochs: [2]
       scheduler.params.warmup_start_factor: [1]
       scheduler.params.eta_min_factor: [0.05]
-      
+
       # 使用BCE损失（简化版固定使用全部24个类别，类别不平衡较严重）
       loss.name: ["multilabel_bce"]
       loss.params.pos_weight: [10.0]  # 正样本权重

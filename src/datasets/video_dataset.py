@@ -13,7 +13,10 @@ import os
 import torch
 import cv2
 import numpy as np
+
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+
 from abc import ABC, abstractmethod
 
 
@@ -405,7 +408,7 @@ class CombinedVideoDataset(Dataset):
 
 
 if __name__ == "__main__":
-    from torch.utils.data import DataLoader
+
     
     # 测试单独的数据集
     train_data = VideoDataset(

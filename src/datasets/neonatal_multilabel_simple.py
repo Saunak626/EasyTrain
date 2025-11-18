@@ -55,12 +55,14 @@ class NeonatalMultilabelSimple(Dataset):
         train_ratio (float): 训练集比例，默认0.8
     """
     
-    def __init__(self, frames_dir, labels_file, split='train', clip_len=16, train_ratio=0.8):
+    def __init__(self, frames_dir, labels_file, split='train', clip_len=16,
+                 train_ratio=0.8, target_size=(224, 224)):
         self.frames_dir = frames_dir
         self.labels_file = labels_file
         self.split = split
         self.clip_len = clip_len
         self.train_ratio = train_ratio
+        self.target_size = target_size  # 帧resize尺寸，保持可配置
         
         # 定义行为标签（24个原始标签）
         self.behavior_labels = [
@@ -133,11 +135,12 @@ class NeonatalMultilabelSimple(Dataset):
         """获取单个样本"""
         sample = self.samples[index]
 
-        # 1. 加载视频帧
-        frames = self._load_frames(sample['frames_dir'])
+        # 1. 获取帧路径并采样索引
+        frame_paths = self._get_frame_paths(sample['frames_dir'])
+        indices = self._sample_indices(len(frame_paths), self.clip_len)
 
-        # 2. 采样到固定帧数
-        frames = self._sample_frames(frames, self.clip_len)
+        # 2. 按索引读取所需帧并采样到固定帧数
+        frames = self._load_selected_frames(frame_paths, indices)
 
         # 3. 预处理：normalize + to_tensor
         frames = self._preprocess(frames)
@@ -147,16 +150,8 @@ class NeonatalMultilabelSimple(Dataset):
 
         return frames, labels
 
-    def _load_frames(self, frames_dir):
-        """从目录加载所有帧图像（优化版：使用PIL替代cv2）
-
-        Args:
-            frames_dir (str): 帧图像目录路径
-
-        Returns:
-            np.ndarray: 形状为 (T, H, W, C) 的帧数组
-        """
-        # 获取所有jpg文件并排序
+    def _get_frame_paths(self, frames_dir):
+        """获取目录下所有帧路径"""
         frame_paths = sorted([
             os.path.join(frames_dir, f)
             for f in os.listdir(frames_dir)
@@ -166,43 +161,44 @@ class NeonatalMultilabelSimple(Dataset):
         if len(frame_paths) == 0:
             raise ValueError(f"没有找到帧图像: {frames_dir}")
 
-        # 🔧 优化：使用PIL批量读取帧（比cv2快约30%）
-        frames = []
-        for frame_path in frame_paths:
-            try:
-                # 使用PIL读取图像（RGB格式）
-                img = Image.open(frame_path).convert('RGB')
-                # Resize到标准尺寸 224x224
-                img = img.resize((224, 224), Image.BILINEAR)
-                # 转换为numpy数组
-                frame = np.array(img, dtype=np.float32)
-                frames.append(frame)
-            except Exception as e:
-                raise ValueError(f"无法读取图像 {frame_path}: {e}")
+        return frame_paths
 
-        # 转换为numpy数组: (T, H, W, C)
-        return np.array(frames, dtype=np.float32)
-
-    def _sample_frames(self, frames, clip_len):
-        """采样到固定帧数
-
-        Args:
-            frames (np.ndarray): 输入帧，形状 (T, H, W, C)
-            clip_len (int): 目标帧数
-
-        Returns:
-            np.ndarray: 采样后的帧，形状 (clip_len, H, W, C)
-        """
-        total_frames = frames.shape[0]
-
+    def _sample_indices(self, total_frames, clip_len):
+        """在不读取图像的情况下生成采样索引"""
         if total_frames >= clip_len:
-            # 帧数足够，随机裁剪
             start_idx = np.random.randint(0, total_frames - clip_len + 1)
-            return frames[start_idx:start_idx + clip_len]
-        else:
-            # 帧数不足，填充最后一帧
-            padding = np.tile(frames[-1:], (clip_len - total_frames, 1, 1, 1))
-            return np.concatenate([frames, padding], axis=0)
+            return list(range(start_idx, start_idx + clip_len))
+
+        # 帧数不足时，补齐最后一帧
+        return list(range(total_frames)) + [total_frames - 1] * (clip_len - total_frames)
+
+    def _read_frame(self, frame_path):
+        """读取单帧并resize（OpenCV实现）"""
+        img = cv2.imread(frame_path, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError(f"无法读取图像 {frame_path}")
+
+        # BGR -> RGB
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        if self.target_size:
+            target_w, target_h = self.target_size
+            img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+
+        return img.astype(np.float32)
+
+    def _load_selected_frames(self, frame_paths, indices):
+        """仅按采样索引加载所需帧，避免读取整段视频"""
+        # 先读取一帧以确定shape并完成预分配
+        first_frame = self._read_frame(frame_paths[indices[0]])
+        h, w, c = first_frame.shape
+        buffer = np.empty((len(indices), h, w, c), dtype=np.float32)
+        buffer[0] = first_frame
+
+        for i, idx in enumerate(indices[1:], start=1):
+            buffer[i] = self._read_frame(frame_paths[idx])
+
+        return buffer
 
     def _preprocess(self, frames):
         """预处理：归一化 + 转换为tensor
@@ -277,5 +273,3 @@ def example_usage():
 
 if __name__ == '__main__':
     example_usage()
-
-

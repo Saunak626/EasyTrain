@@ -231,64 +231,6 @@ class NeonatalMultilabelDataset(Dataset):
                 # 如果导入失败，使用传统方式
                 pass
         return None
-    
-    def _load_samples(self):
-        """加载样本数据"""
-        logger.info(f"从 {self.labels_file} 加载标签数据...")
-        
-        # 读取标签文件
-        df = pd.read_excel(self.labels_file)
-        logger.info(f"标签文件包含 {len(df)} 行数据")
-        
-        samples = []
-        available_sessions = set(os.listdir(self.frames_dir))
-        
-        for idx, row in df.iterrows():
-            # 提取文件名和clip序号
-            filename = str(row['文件名']).strip()
-            clip_id = str(int(row['文件内动作序号']))
-            
-            # 清理文件名（移除.mov等扩展名）
-            session_name = filename.replace('.mov', '').replace('.mp4', '')
-            
-            # 检查对应的帧图像目录是否存在
-            session_dir = os.path.join(self.frames_dir, session_name)
-            clip_dir = os.path.join(session_dir, clip_id)
-            
-            if not os.path.exists(clip_dir):
-                continue
-            
-            # 检查是否有帧图像
-            frame_files = [f for f in os.listdir(clip_dir) if f.endswith('.jpg')]
-            if len(frame_files) == 0:
-                continue
-            
-            # 提取多标签向量
-            label_vector = []
-            for label in self.behavior_labels:
-                if label in row:
-                    label_vector.append(float(row[label]))
-                else:
-                    label_vector.append(0.0)
-            
-            # 跳过全零标签（可选，根据需求调整）
-            if sum(label_vector) == 0:
-                continue
-            
-            sample = {
-                'session_name': session_name,
-                'clip_id': clip_id,
-                'frames_dir': clip_dir,
-                'labels': label_vector,
-                'start_time': row.get('开始时间(秒)', 0),
-                'end_time': row.get('结束时间(秒)', 0),
-                'duration': row.get('时长(秒)', 0)
-            }
-            samples.append(sample)
-        
-        logger.info(f"成功加载 {len(samples)} 个有效样本")
-        return samples
-
     def _load_samples_optimized(self):
         """使用优化的标签处理器加载样本数据"""
         logger.info(f"使用优化缓存加载样本数据...")
@@ -309,7 +251,6 @@ class NeonatalMultilabelDataset(Dataset):
             tuple: (selected_classes, class_mapping) 选定的类别列表和映射关系
         """
         if self.top_n_classes is None:
-            # 使用全部类别
             selected_classes = self.original_behavior_labels.copy()
             class_mapping = {i: i for i in range(len(selected_classes))}
             logger.info(f"使用全部 {len(selected_classes)} 个类别")
@@ -336,12 +277,6 @@ class NeonatalMultilabelDataset(Dataset):
 
         # 创建新旧类别索引的映射关系
         class_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(selected_class_indices)}
-
-        logger.info(f"类别筛选结果:")
-        for new_idx, old_idx in enumerate(selected_class_indices):
-            class_name = self.original_behavior_labels[old_idx]
-            count = class_counts[old_idx]
-            logger.info(f"  {new_idx}: {class_name} (原索引{old_idx}, {count}个样本)")
 
         return selected_classes, class_mapping
 
@@ -529,42 +464,19 @@ class NeonatalMultilabelDataset(Dataset):
                 if label_value > 0:
                     test_class_counts[i] += 1
 
-        # 🔧 新增：计算分布差异的统计指标
+        # 计算分布差异的统计指标（用于验证分层效果）
         ratios_diff = []
-
-        # 计算分布差异
-        logger.info(f"📊 {method} 验证结果:")
-        logger.info(f"   训练集样本数: {len(train_indices)}, 测试集样本数: {len(test_indices)}")
-        logger.info(f"   划分比例: {len(train_indices)/(len(train_indices)+len(test_indices)):.1%} / "
-                   f"{len(test_indices)/(len(train_indices)+len(test_indices)):.1%}")
-        logger.info("   各类别分布:")
-
-        for i, class_name in enumerate(self.behavior_labels):
+        for i in range(len(self.behavior_labels)):
             train_count = train_class_counts.get(i, 0)
             test_count = test_class_counts.get(i, 0)
             total_count = train_count + test_count
 
             if total_count > 0:
                 train_ratio = train_count / total_count
-                test_ratio = test_count / total_count
                 ratio_diff = abs(train_ratio - 0.8)  # 理想情况下训练集应该占80%
                 ratios_diff.append(ratio_diff)
-                logger.info(f"     {class_name}: 训练集{train_count}({train_ratio:.1%}) "
-                           f"测试集{test_count}({test_ratio:.1%}) [偏差:{ratio_diff:.1%}]")
-            else:
-                logger.info(f"     {class_name}: 无样本")
 
-        # 🔧 新增：输出分层质量评估
-        if ratios_diff:
-            avg_diff = np.mean(ratios_diff)
-            max_diff = np.max(ratios_diff)
-            logger.info(f"   分层质量: 平均偏差={avg_diff:.2%}, 最大偏差={max_diff:.2%}")
-            if max_diff < 0.05:
-                logger.info(f"   ✅ 分层效果优秀 (最大偏差 < 5%)")
-            elif max_diff < 0.10:
-                logger.info(f"   ✅ 分层效果良好 (最大偏差 < 10%)")
-            else:
-                logger.info(f"   ⚠️  分层效果一般 (最大偏差 >= 10%)")
+        return True
     
     def set_model_type(self, model_type):
         """设置模型类型并更新transforms（用于网格搜索）"""
@@ -574,32 +486,34 @@ class NeonatalMultilabelDataset(Dataset):
     def __len__(self):
         return len(self.samples)
     
+    def _sample_frames(self, buffer):
+        """统一的帧采样方法
+
+        Args:
+            buffer: 输入帧缓冲区，形状为 (T, H, W, C)
+
+        Returns:
+            采样后的帧缓冲区，形状为 (clip_len, H, W, C)
+        """
+        if self.sampling_mode == 'fps' and self.target_fps is not None:
+            # FPS 采样
+            return self.fps_sampling_neonatal(buffer, self.clip_len, self.target_fps, self.original_fps)
+        else:
+            # 随机采样
+            return self._temporal_crop(buffer, self.clip_len)
+
     def __getitem__(self, index):
         """获取单个样本"""
         sample = self.samples[index]
-        
+
         # 加载视频帧
         buffer = self.load_frames(sample['frames_dir'])
-        
+
+        # 统一的帧采样
+        buffer = self._sample_frames(buffer)
+
         # 如果有模型特定的transforms，使用官方transforms
         if self.model_transforms is not None:
-            # 根据采样模式选择采样策略
-            if self.sampling_mode == 'fps' and self.target_fps is not None:
-                # 使用针对新生儿数据集优化的FPS采样
-                buffer = self.fps_sampling_neonatal(buffer, self.clip_len, self.target_fps, self.original_fps)
-            else:
-                # 使用传统的随机采样（默认模式）
-                if buffer.shape[0] > self.clip_len:
-                    # 随机选择起始帧
-                    start_idx = np.random.randint(0, buffer.shape[0] - self.clip_len + 1)
-                    buffer = buffer[start_idx:start_idx + self.clip_len]
-                elif buffer.shape[0] < self.clip_len:
-                    # 重复最后一帧
-                    last_frame = buffer[-1]
-                    pad_size = self.clip_len - buffer.shape[0]
-                    padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
-                    buffer = np.concatenate([buffer, padding], axis=0)
-
             # 转换为torch tensor格式: (T, H, W, C) -> (T, C, H, W)
             buffer = torch.from_numpy(buffer).float() / 255.0
             buffer = buffer.permute(0, 3, 1, 2)  # (T, H, W, C) -> (T, C, H, W)
@@ -608,23 +522,14 @@ class NeonatalMultilabelDataset(Dataset):
             buffer = self.model_transforms(buffer)
         else:
             # 使用传统的预处理方式（向后兼容）
-            # 根据采样模式选择采样策略
-            if self.sampling_mode == 'fps' and self.target_fps is not None:
-                # 使用针对新生儿数据集优化的FPS采样
-                buffer = self.fps_sampling_neonatal(buffer, self.clip_len, self.target_fps, self.original_fps)
-                # 应用传统的空间裁剪和预处理
-                buffer = self.crop_spatial_only(buffer, self.crop_size)
-            else:
-                # 使用传统的时空裁剪（默认模式）
-                buffer = self.crop(buffer, self.clip_len, self.crop_size)
-
+            buffer = self.crop(buffer, crop_size=self.crop_size, temporal_crop=False)
             buffer = self.normalize(buffer)  # 对模型进行归一化处理
             buffer = self.to_tensor(buffer)  # 对维度进行转化
             buffer = torch.from_numpy(buffer)
-        
+
         # 获取多标签向量
         labels = torch.tensor(sample['labels'], dtype=torch.float32)
-        
+
         # 返回torch格式的特征和标签
         return buffer, labels
     
@@ -677,52 +582,44 @@ class NeonatalMultilabelDataset(Dataset):
 
         return buffer
     
-    def crop(self, buffer, clip_len, crop_size):
-        """对视频帧进行时间和空间裁剪（适应不同输入尺寸）"""
-        # 处理时间维度
-        if buffer.shape[0] <= clip_len:
-            # 重复最后一帧直到达到所需帧数
-            if buffer.shape[0] == 0:
-                # 如果没有帧，创建黑色帧
-                buffer = np.zeros((1, buffer.shape[1], buffer.shape[2], 3), dtype=buffer.dtype)
+    def _temporal_crop(self, buffer, clip_len):
+        """时间维度裁剪
 
+        Args:
+            buffer: 输入帧缓冲区，形状为 (T, H, W, C)
+            clip_len: 目标帧数
+
+        Returns:
+            裁剪后的帧缓冲区，形状为 (clip_len, H, W, C)
+        """
+        if buffer.shape[0] <= clip_len:
+            # 帧数不足，填充
+            if buffer.shape[0] == 0:
+                buffer = np.zeros((1, buffer.shape[1], buffer.shape[2], 3), dtype=buffer.dtype)
             last_frame = buffer[-1]
             pad_size = clip_len - buffer.shape[0]
             padding = np.tile(last_frame[np.newaxis], (pad_size, 1, 1, 1))
-            buffer = np.concatenate([buffer, padding], axis=0)
-            time_index = 0
+            return np.concatenate([buffer, padding], axis=0)
         else:
+            # 随机裁剪
             time_index = np.random.randint(buffer.shape[0] - clip_len)
+            return buffer[time_index:time_index + clip_len, :, :, :]
 
-        buffer = buffer[time_index:time_index + clip_len, :, :, :]
+    def _spatial_crop(self, buffer, crop_size):
+        """空间维度裁剪（resize 或随机裁剪）
 
-        # 处理空间维度 - 如果输入尺寸小于crop_size，则resize；否则随机裁剪
-        target_shape = (clip_len, crop_size, crop_size, 3)
+        Args:
+            buffer: 输入帧缓冲区，形状为 (T, H, W, C)
+            crop_size: 裁剪尺寸
 
-        if buffer.shape[1] < crop_size or buffer.shape[2] < crop_size:
-            # 输入尺寸小于目标尺寸，进行resize
-            resized_buffer = np.zeros(target_shape, dtype=buffer.dtype)
-            for i in range(clip_len):
-                resized_buffer[i] = cv2.resize(buffer[i], (crop_size, crop_size))
-            return resized_buffer
-        else:
-            # 输入尺寸大于等于目标尺寸，进行随机裁剪
-            height_index = np.random.randint(buffer.shape[1] - crop_size)
-            width_index = np.random.randint(buffer.shape[2] - crop_size)
-
-            buffer = buffer[:,
-                            height_index:height_index + crop_size,
-                            width_index:width_index + crop_size, :]
-            return buffer
-
-    def crop_spatial_only(self, buffer, crop_size):
-        """仅进行空间裁剪，不进行时间维度裁剪（用于FPS采样后的处理）"""
-        # 处理空间维度 - 如果输入尺寸小于crop_size，则resize；否则随机裁剪
+        Returns:
+            裁剪后的帧缓冲区，形状为 (T, crop_size, crop_size, C)
+        """
         clip_len = buffer.shape[0]
         target_shape = (clip_len, crop_size, crop_size, 3)
 
         if buffer.shape[1] < crop_size or buffer.shape[2] < crop_size:
-            # 输入尺寸小于目标尺寸，进行resize
+            # 输入尺寸小于目标尺寸，进行 resize
             resized_buffer = np.zeros(target_shape, dtype=buffer.dtype)
             for i in range(clip_len):
                 resized_buffer[i] = cv2.resize(buffer[i], (crop_size, crop_size))
@@ -731,11 +628,30 @@ class NeonatalMultilabelDataset(Dataset):
             # 输入尺寸大于等于目标尺寸，进行随机裁剪
             height_index = np.random.randint(buffer.shape[1] - crop_size)
             width_index = np.random.randint(buffer.shape[2] - crop_size)
+            return buffer[:, height_index:height_index + crop_size,
+                          width_index:width_index + crop_size, :]
 
-            buffer = buffer[:,
-                            height_index:height_index + crop_size,
-                            width_index:width_index + crop_size, :]
-            return buffer
+    def crop(self, buffer, clip_len=None, crop_size=None, temporal_crop=True):
+        """统一的裁剪方法
+
+        Args:
+            buffer: 输入帧缓冲区，形状为 (T, H, W, C)
+            clip_len: 目标帧数（None 表示不进行时间裁剪）
+            crop_size: 裁剪尺寸（None 表示不进行空间裁剪）
+            temporal_crop: 是否进行时间维度裁剪
+
+        Returns:
+            裁剪后的帧缓冲区
+        """
+        # 时间维度裁剪
+        if temporal_crop and clip_len is not None:
+            buffer = self._temporal_crop(buffer, clip_len)
+
+        # 空间维度裁剪
+        if crop_size is not None:
+            buffer = self._spatial_crop(buffer, crop_size)
+
+        return buffer
 
     def normalize(self, buffer):
         """对视频帧进行归一化处理（参考UCF101实现）"""

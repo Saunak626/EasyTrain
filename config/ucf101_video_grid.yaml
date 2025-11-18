@@ -36,7 +36,7 @@ data:
 
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
-  epochs: 2
+  epochs: 10
 
 # GPU配置
 gpu:
@@ -53,7 +53,7 @@ models_to_train:
   # 启用要训练的模型列表，注释掉不需要训练的模型
   - "r3d_18"
   - "mc3_18"
-  - "r2plus1d_18"
+  # - "r2plus1d_18"
   # - "s3d"
   # - "mvit_v1_b"
   # - "mvit_v2_s"

@@ -52,7 +52,7 @@ SUPPORTED_TASKS = {
     },
     'video_classification': {
         'description': '视频分类任务',
-        'supported_datasets': ['ucf101', 'ucf101_video', 'neonatal_multilabel'],
+        'supported_datasets': ['ucf101', 'ucf101_video', 'neonatal_multilabel', 'neonatal_multilabel_simple'],
         'model_factory': 'get_video_model',
         'default_model': 'r3d_18'
     }

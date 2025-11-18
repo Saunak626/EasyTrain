@@ -12,6 +12,7 @@ from .cifar10_dataset import CIFAR10Dataset
 from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
 from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
+from .neonatal_multilabel_simple import NeonatalMultilabelSimple
 
 
 def _resolve_path(path, default_path, project_root):
@@ -321,8 +322,63 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
 
         num_classes = train_dataset.get_num_classes()
 
+    # 新生儿多标签数据集 - 简化版
+    elif dataset_name == 'neonatal_multilabel_simple':
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 提取简化版支持的参数
+        clip_len = kwargs.get('clip_len', 16)
+        train_ratio = kwargs.get('train_ratio', 0.8)
+
+        # 数据路径：复用完整版的路径解析逻辑
+        labels_file_param = (
+            kwargs.get('labels_file') or
+            kwargs.get('label_file') or
+            kwargs.get('labels_path')
+        )
+        frames_dir, labels_file = _resolve_neonatal_paths(data_dir, labels_file_param)
+
+        # 创建简化版数据集
+        train_dataset = NeonatalMultilabelSimple(
+            frames_dir=frames_dir,
+            labels_file=labels_file,
+            split='train',
+            clip_len=clip_len,
+            train_ratio=train_ratio
+        )
+
+        test_dataset = NeonatalMultilabelSimple(
+            frames_dir=frames_dir,
+            labels_file=labels_file,
+            split='test',
+            clip_len=clip_len,
+            train_ratio=train_ratio
+        )
+
+        num_classes = train_dataset.get_num_classes()
+
+        # 简化版不支持以下高级功能，给出警告
+        unsupported_params = {
+            'use_weighted_sampling': '加权采样',
+            'top_n_classes': '类别筛选',
+            'stratified_split': '分层采样',
+            'sampling_mode': 'FPS采样',
+            'model_type': '模型特定transforms'
+        }
+
+        for param, feature in unsupported_params.items():
+            if kwargs.get(param) is not None:
+                logger.warning(
+                    f"简化版数据集不支持{feature}，已忽略参数 {param}={kwargs.get(param)}"
+                )
+
     else:
-        raise ValueError(f"不支持的数据集: {dataset_name}。支持的数据集: cifar10, custom, ucf101, ucf101_video, neonatal_multilabel")
+        raise ValueError(
+            f"不支持的数据集: {dataset_name}。"
+            f"支持的数据集: cifar10, custom, ucf101, ucf101_video, "
+            f"neonatal_multilabel, neonatal_multilabel_simple"
+        )
 
     # 按比例随机抽样数据子集（支持快速实验）
     if 0 < data_percentage < 1.0:
@@ -457,6 +513,15 @@ def get_dataset_info(dataset_name):
             "num_classes": None,  # 需要运行时确定（取决于top_n_classes参数）
             "input_size": (3, 16, 112, 112),  # (C, T, H, W)
             "classes": None  # 需要运行时确定（取决于类别筛选结果）
+        }
+    elif dataset_name == "neonatal_multilabel_simple":
+        # 简化版新生儿多标签行为识别数据集
+        # 实际 num_classes 和 classes 会在运行时通过数据集实例 / 元数据获取
+        return {
+            "name": "Neonatal Multilabel Behavior Recognition (Simple)",
+            "num_classes": None,
+            "input_size": (3, 16, 224, 224),  # (C, T, H, W)
+            "classes": None
         }
     else:
         raise ValueError(f"不支持的数据集: {dataset_name}")

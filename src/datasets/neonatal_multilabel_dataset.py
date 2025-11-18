@@ -220,7 +220,7 @@ class NeonatalMultilabelDataset(Dataset):
                     return None
 
                 # 验证兼容性
-                is_compatible, message = validate_model_transforms_compatibility(self.model_type, verbose=False)
+                is_compatible, message = validate_model_transforms_compatibility(self.model_type)
                 if not is_compatible:
                     logger.warning(f"{self.model_type} transforms不兼容: {message}，回退到传统预处理")
                     return None

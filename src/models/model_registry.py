@@ -132,12 +132,11 @@ def get_video_model_transforms(model_type):
     return None
 
 
-def validate_model_transforms_compatibility(model_type, verbose=False):
+def validate_model_transforms_compatibility(model_type):
     """验证模型transforms兼容性
 
     Args:
         model_type (str): 模型类型
-        verbose (bool): 是否输出详细信息
 
     Returns:
         tuple: (is_compatible, message)
@@ -154,39 +153,29 @@ def validate_model_transforms_compatibility(model_type, verbose=False):
         # 测试transforms
         try:
             output = transforms(test_input)
-            
+
             # 不同模型有不同的预训练分辨率，需要灵活处理
             expected_channels, expected_frames = 3, 16
             actual_c, actual_t, actual_h, actual_w = output.shape
-            
+
             # 检查通道数和帧数是否正确
             if actual_c != expected_channels or actual_t != expected_frames:
                 message = f"通道数或帧数不匹配: 期望({expected_channels}, {expected_frames}, H, W), 实际{output.shape}"
-                if verbose:
-                    print(f"警告: {model_type} - {message}")
                 return False, message
-            
+
             # 对于空间分辨率，只要是合理范围内就接受
             if actual_h < 64 or actual_w < 64 or actual_h > 512 or actual_w > 512:
                 message = f"空间分辨率超出合理范围: {actual_h}x{actual_w}"
-                if verbose:
-                    print(f"警告: {model_type} - {message}")
                 return False, message
 
-            if verbose:
-                print(f"✓ {model_type} transforms兼容性验证通过")
             return True, "transforms兼容"
 
         except Exception as e:
             message = f"transforms执行失败: {str(e)}"
-            if verbose:
-                print(f"错误: {model_type} - {message}")
             return False, message
 
     except Exception as e:
         message = f"验证过程失败: {str(e)}"
-        if verbose:
-            print(f"错误: {model_type} - {message}")
         return False, message
 
 
@@ -302,7 +291,11 @@ def create_model_unified(model_type, num_classes=10, pretrained=True, debug=Fals
 
         # 验证transforms兼容性（如果启用）
         if debug and model_type in VIDEO_MODEL_TRANSFORMS_MAP:
-            validate_model_transforms_compatibility(model_type, verbose=True)
+            is_compatible, message = validate_model_transforms_compatibility(model_type)
+            if is_compatible:
+                print(f"✓ {model_type} transforms兼容性验证通过")
+            else:
+                print(f"警告: {model_type} - {message}")
 
     else:
         raise ValueError(f"不支持的模型库: {library}")

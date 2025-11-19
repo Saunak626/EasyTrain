@@ -1,7 +1,4 @@
-"""新生儿多标签数据集 - 简化教学版本
-
-这是一个最小化的多标签视频数据集实现，用于教学和理解核心概念。
-只保留了多标签数据加载的最基本功能。
+"""新生儿多标签数据集
 
 核心功能：
 1. 从帧图像目录加载视频数据
@@ -26,6 +23,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+
 from PIL import Image  # 🔧 新增：使用PIL替代cv2，提升I/O性能
 
 
@@ -143,7 +142,7 @@ class NeonatalMultilabelSimple(Dataset):
         frames = self._load_selected_frames(frame_paths, indices)
 
         # 3. 预处理：normalize + to_tensor
-        frames = self._preprocess(frames)
+        frames = self._preprocess(frames) # TODO: 更换官方的接口
 
         # 4. 获取标签（已在初始化时转换为tensor）
         labels = sample['labels']
@@ -251,7 +250,6 @@ def example_usage():
     )
 
     # 2. 创建DataLoader
-    from torch.utils.data import DataLoader
 
     train_loader = DataLoader(
         train_dataset,
@@ -270,6 +268,9 @@ def example_usage():
     print(f"测试集: {len(test_dataset)} 样本")
     print(f"类别数: {train_dataset.get_num_classes()}")
 
+    frames, labels = train_dataset[0]
+    print(f"测试样本: {labels} 样本")
+    print(f"测试样本尺寸: {frames.shape[0]} 样本")
 
 if __name__ == '__main__':
     example_usage()

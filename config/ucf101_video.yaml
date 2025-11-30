@@ -18,8 +18,8 @@ swanlab:
 # 数据集配置
 data:
   type: ucf101_video   # 使用新的视频帧数据集类型
-  root: data/ucf101    # 数据集根目录
-  num_workers: 16      # 数据加载工作进程数
+  root: /home/swq/posec3d/data/ucf101  # 数据集根目录
+  num_workers: 8      # 数据加载工作进程数
   params:
     clip_len: 16       # 每个视频片段的帧数
 
@@ -32,9 +32,9 @@ model:
 
 # 超参数配置
 hp:
-  batch_size: 64       # 批大小
+  batch_size: 24       # 批大小
   learning_rate: 0.001 # 学习率
-  epochs: 20           # 训练轮数
+  epochs: 10           # 训练轮数
 
 # 优化器配置
 optimizer:

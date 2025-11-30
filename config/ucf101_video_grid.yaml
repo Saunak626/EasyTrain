@@ -20,7 +20,7 @@ swanlab:
 # 数据配置
 data:
   type: ucf101_video  # 使用新的视频帧数据集类型
-  root: data/ucf101   # 数据集根目录
+  root: /home/swq/posec3d/data/ucf101  # 数据集根目录
   num_workers: 16      # 数据加载工作进程数
   params:
     clip_len: 16      # 每个视频片段的帧数

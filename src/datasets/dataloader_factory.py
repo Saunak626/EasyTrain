@@ -242,32 +242,19 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
         num_classes = custom_dataset.num_classes
 
     elif dataset_name in ["ucf101", "ucf101_video"]:
-        # 统一使用VideoDataset处理UCF-101视频数据（从预处理帧图像加载）
-        clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))  # 兼容两种参数名
-
-        # FPS采样相关参数
-        sampling_mode = kwargs.get('sampling_mode', 'random')
-        target_fps = kwargs.get('target_fps', None)
-        original_fps = kwargs.get('original_fps', 16)
+        # UCF-101视频帧数据集（简化版）
+        clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))
 
         train_dataset = VideoDataset(
             dataset_path=data_dir,
             images_path='train',
-            clip_len=clip_len,
-            model_type=model_type,  # 传递模型类型用于动态transforms
-            sampling_mode=sampling_mode,
-            target_fps=target_fps,
-            original_fps=original_fps
+            clip_len=clip_len
         )
 
         # 将val和test合并作为测试集
         test_dataset = CombinedVideoDataset(
             dataset_path=data_dir,
-            clip_len=clip_len,
-            model_type=model_type,  # 传递模型类型用于动态transforms
-            sampling_mode=sampling_mode,
-            target_fps=target_fps,
-            original_fps=original_fps
+            clip_len=clip_len
         )
 
         num_classes = 101  # UCF-101固定为101个类别

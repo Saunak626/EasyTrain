@@ -30,24 +30,24 @@ model:
   params:
     num_classes: 101   # UCF-101有101个动作类别
 
-# 超参数配置
+# 超参数配置（与tmp/train_simple_3dcnn.py一致）
 hp:
-  batch_size: 24       # 批大小
-  learning_rate: 0.001 # 学习率
-  epochs: 10           # 训练轮数
+  batch_size: 24        # 批大小
+  learning_rate: 0.0001 # 学习率（1e-4，与tmp版本一致）
+  epochs: 10            # 训练轮数
 
 # 优化器配置
 optimizer:
-  name: adamw           # 使用Adam优化器
+  name: adamw           # 使用AdamW优化器
   params:
-    weight_decay: 0.001 # 权重衰减
+    weight_decay: 0.01  # 权重衰减（与tmp版本一致）
 
 # 学习率调度器配置
 scheduler:
   name: cosine        # 使用余弦退火调度器
   params:
-    T_max: 50         # 最大轮数
-    eta_min: 0.00005  # 最小学习率
+    T_max: 10         # 最大轮数（与epochs一致）
+    eta_min: 0.000001 # 最小学习率
 
 # 损失函数配置
 loss:

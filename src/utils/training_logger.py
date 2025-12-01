@@ -29,7 +29,7 @@ class TrainingLogger:
         hyperparams = config['hp']
         data_config = config.get('data', {})
         model_config = config.get('model', {})
-        dataset_type = data_config.get('type', 'cifar10')
+        dataset_type = data_config.get('type', 'ucf101_video')
         model_name = model_config.get('type', model_config.get('name', task_info['default_model']))
 
         total_params = sum(p.numel() for p in model.parameters())

@@ -45,6 +45,8 @@ data:
 # 超参数配置（基础默认值，可被网格搜索和命令行覆盖）
 hp:
   epochs: 10
+  batch_size: 32  # 默认值，网格搜索时会被覆盖
+  learning_rate: 0.0001  # 默认值，网格搜索时会被覆盖
 
 # GPU配置
 gpu:
@@ -92,15 +94,12 @@ grid_search:
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18", "r2plus1d_18"]
       hp.batch_size: [48]  # 使用更大的batch_size，128优先
-      hp.learning_rate: [0.001]  # 提高学习率，加快收敛
+      hp.learning_rate: [0.0001]  # 与ucf101_video.yaml一致
       optimizer.name: ["adamw"]
       optimizer.params.weight_decay: [0.01]
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
+      scheduler.name: ["cosine"]  # 统一使用cosine调度器
+      scheduler.params.T_max: [10]  # 与epochs一致
+      scheduler.params.eta_min: [0.000001]
 
       # 🔧 方案A: 完全禁用Focal Loss，只使用BCE + pos_weight（推荐）
       loss.name: ["multilabel_bce"]  # 纯BCE损失，避免Focal Loss过度降低负样本权重
@@ -110,36 +109,30 @@ grid_search:
       # loss.name: ["focal_multilabel_bce"]
       # loss.params.gamma: [0.5]  # 进一步降低gamma到0.5
       
-    # Transformer模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
+    # Transformer模型组 - 精确配对batch_size，统一使用cosine调度器
     transformer_models:
       model.type: ["mvit_v1_b", "mvit_v2_s"]
       hp.batch_size: [36, 32]  # 按顺序配对：mvit_v1_b用36，mvit_v2_s用32
-      hp.learning_rate: [0.001]  # 降低学习率，更稳定
+      hp.learning_rate: [0.0001]  # 与ucf101_video.yaml一致
       optimizer.name: ["adamw"]  # Transformer首选AdamW
-      optimizer.params.weight_decay: [0.05]  # 适中的权重衰减
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
+      optimizer.params.weight_decay: [0.01]  # 与ucf101_video.yaml一致
+      scheduler.name: ["cosine"]  # 统一使用cosine调度器
+      scheduler.params.T_max: [10]  # 与epochs一致
+      scheduler.params.eta_min: [0.000001]
 
       loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
       loss.params.pos_weight: [10.0, 20.0, 30.0]  # 正样本权重，处理类别不平衡
     
-    # Swin3D模型组 - 精确配对batch_size，使用Warmup + Cosine调度策略
+    # Swin3D模型组 - 精确配对batch_size，统一使用cosine调度器
     swin3d_models:
       model.type: ["swin3d_b", "swin3d_s", "swin3d_t"]
       hp.batch_size: [16, 16, 16]  # 按顺序配对：swin3d_b用4，swin3d_s用8，swin3d_t用16
-      hp.learning_rate: [0.001]  # 保守的学习率
+      hp.learning_rate: [0.0001]  # 与ucf101_video.yaml一致
       optimizer.name: ["adamw"]  # Swin系列推荐AdamW
-      optimizer.params.weight_decay: [0.05]  # Swin系列用更大的weight_decay
-      scheduler.name: ["warmup_cosine"]  # 🔧 增加更多调度器选项
-      scheduler.params.warmup_epochs: [2]  # 🔧 增加Warmup期长度：2个epoch
-      scheduler.params.warmup_start_factor: [1]  # Warmup起始学习率比例
-      scheduler.params.eta_min_factor: [0.05]  # 🔧 调整最小学习率：30%或50%（原来1%太低）
-      scheduler.params.step_size: [3]  # 每3或5个epoch降低学习率
-      scheduler.params.gamma: [0.9]  # 🔧 更温和的学习率衰减因子
+      optimizer.params.weight_decay: [0.01]  # 与ucf101_video.yaml一致
+      scheduler.name: ["cosine"]  # 统一使用cosine调度器
+      scheduler.params.T_max: [10]  # 与epochs一致
+      scheduler.params.eta_min: [0.000001]
       loss.name: ["focal_multilabel_bce"]  # "multilabel_bce", "focal_multilabel_balanced",  多标签二元交叉熵损失
       loss.params.pos_weight: [10.0, 20.0, 30.0]  # 正样本权重，处理类别不平衡
 

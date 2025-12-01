@@ -1,6 +1,6 @@
 """基础训练器模块
 
-提供统一的训练接口，支持图像和视频分类任务。
+提供统一的训练接口，支持视频分类任务。
 集成Accelerate库实现多GPU训练和SwanLab实验追踪。
 """
 
@@ -14,7 +14,6 @@ from accelerate import Accelerator
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.models.image_net import get_model
 from src.models.video_net import get_video_model
 from src.losses.loss_factory import get_loss_function
 from src.optimizers.optimizer_factory import get_optimizer
@@ -33,12 +32,6 @@ TRAINING_CONSTANTS = {
 }
 
 SUPPORTED_TASKS = {
-    'image_classification': {
-        'description': '图像分类任务',
-        'supported_datasets': ['cifar10', 'custom'],
-        'model_factory': 'get_model',
-        'default_model': 'resnet18'
-    },
     'video_classification': {
         'description': '视频分类任务',
         'supported_datasets': ['ucf101', 'ucf101_video', 'neonatal_multilabel', 'neonatal_multilabel_simple'],
@@ -222,7 +215,7 @@ def setup_experiment(config: Dict[str, Any], exp_name: Optional[str] = None) -> 
 
     task_info = SUPPORTED_TASKS[task_tag]
     data_config = config.get('data', {})
-    dataset_type = data_config.get('type', 'cifar10')
+    dataset_type = data_config.get('type', 'ucf101_video')
 
     if dataset_type not in task_info['supported_datasets']:
         raise ValueError(f"任务 '{task_tag}' 不支持数据集 '{dataset_type}'")
@@ -245,7 +238,7 @@ def setup_data_and_model(config: Dict[str, Any], task_info: Dict[str, Any],
     """数据和模型初始化"""
     hyperparams = config['hp']
     model_config = config.get('model', {})
-    dataset_type = data_config.get('type', 'cifar10')
+    dataset_type = data_config.get('type', 'ucf101_video')
     model_name = model_config.get('type', model_config.get('name', task_info['default_model']))
 
     train_dataloader, test_dataloader, num_classes = create_dataloaders(
@@ -357,10 +350,8 @@ def get_task_output_dir(task_tag: str, dataset_type: str) -> str:
         task_subdir = "neonatal_multilabel" if 'neonatal' in dataset_type.lower() else "multilabel_classification"
     elif 'video' in task_tag.lower():
         task_subdir = "video_classification"
-    elif 'image' in task_tag.lower():
-        task_subdir = "image_classification"
     else:
-        task_subdir = dataset_type.lower() or "general"
+        task_subdir = dataset_type.lower() or "video_classification"
 
     output_dir = os.path.join(base_dir, task_subdir)
     os.makedirs(output_dir, exist_ok=True)

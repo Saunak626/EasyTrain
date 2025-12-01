@@ -585,10 +585,8 @@ def run_grid_search(args):
         task_subdir = "neonatal_multilabel" if 'neonatal' in dataset_type.lower() else "multilabel_classification"
     elif 'video' in task_tag.lower():
         task_subdir = "video_classification"
-    elif 'image' in task_tag.lower():
-        task_subdir = "image_classification"
     else:
-        task_subdir = dataset_type.lower() or "general"
+        task_subdir = dataset_type.lower() or "video_classification"
 
     results_dir = os.path.join("runs", task_subdir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

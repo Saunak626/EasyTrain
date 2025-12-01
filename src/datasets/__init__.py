@@ -1,9 +1,8 @@
 """数据集模块
 
-该模块提供了统一的数据集加载接口，支持多种数据集类型：
-- CIFAR-10: 内置支持，自动下载和数据增强
-- 自定义数据集: 支持目录结构和CSV标注文件
+该模块提供了统一的数据集加载接口，支持视频分类数据集：
 - UCF-101: 视频动作识别数据集，支持多种视频模型
+- 新生儿多标签: 新生儿行为多标签识别数据集
 
 主要功能：
 1. 提供标准化的数据加载接口
@@ -14,17 +13,22 @@
 使用示例：
     >>> from src.datasets import create_dataloaders
     >>> train_loader, test_loader, num_classes = create_dataloaders(
-    ...     dataset_name='cifar10',
+    ...     dataset_name='ucf101_video',
     ...     data_dir='./data',
-    ...     batch_size=128
+    ...     batch_size=32
     ... )
 """
 
-from .cifar10_dataset import CIFAR10Dataset
-from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
 from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
+from .neonatal_multilabel_simple import NeonatalMultilabelSimple
 from .dataloader_factory import create_dataloaders, get_dataset_info
 
-__all__ = ['CIFAR10Dataset', 'CustomDatasetWrapper', 'VideoDataset', 'CombinedVideoDataset',
-           'NeonatalMultilabelDataset', 'create_dataloaders', 'get_dataset_info']
+__all__ = [
+    'VideoDataset',
+    'CombinedVideoDataset',
+    'NeonatalMultilabelDataset',
+    'NeonatalMultilabelSimple',
+    'create_dataloaders',
+    'get_dataset_info'
+]

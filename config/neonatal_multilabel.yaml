@@ -38,10 +38,10 @@ model:
   params:
     num_classes: 10           # 会被数据集自动覆盖
 
-# 超参数配置
+# 超参数配置（与ucf101_video.yaml一致）
 hp:
   batch_size: 32
-  learning_rate: 0.001
+  learning_rate: 0.0001  # 与ucf101_video.yaml一致
   epochs: 10
 
 # GPU配置
@@ -49,19 +49,18 @@ gpu:
   device_ids: "0"
   auto_select: true
 
-# 优化器配置
+# 优化器配置（与ucf101_video.yaml一致）
 optimizer:
   name: adamw
   params:
     weight_decay: 0.01
 
-# 学习率调度器配置
+# 学习率调度器配置（与ucf101_video.yaml一致）
 scheduler:
-  name: warmup_cosine
+  name: cosine  # 统一使用cosine调度器
   params:
-    warmup_epochs: 2
-    warmup_start_factor: 1.0
-    eta_min_factor: 0.05
+    T_max: 10  # 与epochs一致
+    eta_min: 0.000001
 
 # 损失函数配置
 loss:

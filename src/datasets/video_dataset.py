@@ -157,10 +157,6 @@ class CombinedVideoDataset(Dataset):
             return self.test_dataset.get_sample_id(index - self.val_len)
 
 
-# 向后兼容
-BaseVideoDataset = VideoDataset
-
-
 if __name__ == "__main__":
     # 测试
     train_data = VideoDataset(dataset_path='data/ucf101', images_path='train', clip_len=16)

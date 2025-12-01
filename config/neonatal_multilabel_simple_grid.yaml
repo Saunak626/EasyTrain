@@ -1,5 +1,6 @@
 # 新生儿多标签行为识别网格搜索配置 - 简化版
 # 使用简化版数据集 NeonatalMultilabelSimple
+# 基于完整版配置，但使用简化的数据集实现
 
 # 任务配置
 task:
@@ -21,14 +22,14 @@ swanlab:
 data:
   type: neonatal_multilabel_simple  # 使用简化版数据集类型
   root: ../Neonate-Feeding-Assessment/data/cpu_processed_627/frames_segments
-  num_workers: 32  # 🔧 优化：降低worker数量，减少磁盘I/O竞争（原12 -> 4）
+  num_workers: 12  # 适中的worker数量
   params:
     clip_len: 16      # 每个视频片段的帧数
     train_ratio: 0.8  # 训练集比例（简化版独有参数）
     # 标签文件路径
     labels_file: ../Neonate-Feeding-Assessment/result_xlsx/shanghai/multi_hot_labels.xlsx
     
-    # 注意：简化版不支持以下参数
+    # 注意：简化版不支持以下参数（会被忽略并给出警告）
     # top_n_classes: 不支持（固定使用全部24个类别）
     # stratified_split: 不支持（使用简单划分）
     # min_samples_per_class: 不支持
@@ -40,6 +41,8 @@ data:
 # 超参数配置
 hp:
   epochs: 10
+  batch_size: 16  # 默认值，网格搜索时会被覆盖
+  learning_rate: 0.0001  # 默认值，网格搜索时会被覆盖
 
 # GPU配置
 gpu:
@@ -63,20 +66,19 @@ continue_on_error: true
 parallel_jobs: 1
 save_results: true
 
-# 网格搜索超参数 - 简化配置
+# 网格搜索超参数 - 简化配置（与ucf101_video.yaml一致）
 grid_search:
   groups:
     # 轻量级3D CNN模型组
     light_3d_cnn:
       model.type: ["r3d_18", "mc3_18"]
-      hp.batch_size: [16]  # 🔧 优化：降低batch_size减少内存压力（原16 -> 8）
-      hp.learning_rate: [0.001]
+      hp.batch_size: [16, 24]  # 较小的batch_size，适合快速测试
+      hp.learning_rate: [0.0001]  # 与ucf101_video.yaml一致
       optimizer.name: ["adamw"]
-      optimizer.params.weight_decay: [0.01]
-      scheduler.name: ["warmup_cosine"]
-      scheduler.params.warmup_epochs: [2]
-      scheduler.params.warmup_start_factor: [1]
-      scheduler.params.eta_min_factor: [0.05]
+      optimizer.params.weight_decay: [0.01]  # 与ucf101_video.yaml一致
+      scheduler.name: ["cosine"]  # 统一使用cosine调度器
+      scheduler.params.T_max: [10]  # 与epochs一致
+      scheduler.params.eta_min: [0.000001]
 
       # 使用BCE损失（简化版固定使用全部24个类别，类别不平衡较严重）
       loss.name: ["multilabel_bce"]

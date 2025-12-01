@@ -8,8 +8,6 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from collections import Counter
-from .cifar10_dataset import CIFAR10Dataset
-from .custom_dataset import CustomDatasetWrapper
 from .video_dataset import VideoDataset, CombinedVideoDataset
 from .neonatal_multilabel_dataset import NeonatalMultilabelDataset
 from .neonatal_multilabel_simple import NeonatalMultilabelSimple
@@ -29,6 +27,25 @@ def _resolve_path(path, default_path, project_root):
     if not path:
         return default_path
     return path if os.path.isabs(path) else os.path.join(project_root, path)
+
+
+def _get_model_input_size(model_type):
+    """根据模型类型返回合适的输入尺寸
+    
+    Args:
+        model_type (str): 模型类型
+        
+    Returns:
+        tuple: (H, W) 输入尺寸
+    """
+    # 需要 224x224 的模型
+    large_input_models = ['s3d', 'mvit_v1_b', 'mvit_v2_s', 'swin3d_b', 'swin3d_s', 'swin3d_t']
+    
+    if model_type and model_type.lower() in large_input_models:
+        return (224, 224)
+    else:
+        # 默认使用 112x112（适用于 r3d_18, mc3_18, r2plus1d_18）
+        return (112, 112)
 
 
 def _resolve_neonatal_paths(data_dir, labels_file_param):
@@ -217,44 +234,23 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
     # 数据子采样比例（0-1），1.0表示使用全部数据
     data_percentage = float(kwargs.get('data_percentage', 1.0))
 
-    if dataset_name == "cifar10":
-        # 创建CIFAR-10数据集
-        cifar10_dataset = CIFAR10Dataset(
-            data_dir=data_dir,
-            augment=kwargs.get('augment', True),
-            download=kwargs.get('download', True)
-        )
-        
-        train_dataset, test_dataset = cifar10_dataset.get_datasets()
-        num_classes = cifar10_dataset.num_classes
-
-    elif dataset_name == "custom":
-        # 创建自定义数据集
-        custom_dataset = CustomDatasetWrapper(
-            data_dir=data_dir,
-            csv_file=kwargs.get('csv_file', None),
-            image_size=kwargs.get('image_size', 224),
-            augment=kwargs.get('augment', True),
-            train_split=kwargs.get('train_split', 0.8)
-        )
-        
-        train_dataset, test_dataset = custom_dataset.get_datasets()
-        num_classes = custom_dataset.num_classes
-
-    elif dataset_name in ["ucf101", "ucf101_video"]:
+    if dataset_name in ["ucf101", "ucf101_video"]:
         # UCF-101视频帧数据集（简化版）
         clip_len = kwargs.get('clip_len', kwargs.get('frames_per_clip', 16))
+        img_size = _get_model_input_size(model_type)
 
         train_dataset = VideoDataset(
             dataset_path=data_dir,
             images_path='train',
-            clip_len=clip_len
+            clip_len=clip_len,
+            img_size=img_size
         )
 
         # 将val和test合并作为测试集
         test_dataset = CombinedVideoDataset(
             dataset_path=data_dir,
-            clip_len=clip_len
+            clip_len=clip_len,
+            img_size=img_size
         )
 
         num_classes = 101  # UCF-101固定为101个类别
@@ -363,8 +359,7 @@ def create_dataloaders(dataset_name, data_dir, batch_size, num_workers=4, model_
     else:
         raise ValueError(
             f"不支持的数据集: {dataset_name}。"
-            f"支持的数据集: cifar10, custom, ucf101, ucf101_video, "
-            f"neonatal_multilabel, neonatal_multilabel_simple"
+            f"支持的数据集: ucf101, ucf101_video, neonatal_multilabel, neonatal_multilabel_simple"
         )
 
     # 按比例随机抽样数据子集（支持快速实验）
@@ -470,7 +465,7 @@ def get_dataset_info(dataset_name):
     获取数据集基本信息
     
     Args:
-        dataset_name (str): 数据集名称，支持'cifar10'、'custom'或'ucf101'
+        dataset_name (str): 数据集名称，支持'ucf101'、'neonatal_multilabel'等
         
     Returns:
         dict: 包含数据集名称、类别数、输入尺寸和类别列表的字典
@@ -480,22 +475,7 @@ def get_dataset_info(dataset_name):
     """
     dataset_name = dataset_name.lower()
     
-    if dataset_name == "cifar10":
-        return {
-            "name": "CIFAR-10",
-            "num_classes": 10,
-            "input_size": (3, 32, 32),
-            "classes": ['airplane', 'automobile', 'bird', 'cat', 'deer', 
-                       'dog', 'frog', 'horse', 'ship', 'truck']
-        }
-    elif dataset_name == "custom":
-        return {
-            "name": "Custom Dataset",
-            "num_classes": None,  # 需要运行时确定
-            "input_size": (3, 224, 224),  # 默认大小
-            "classes": None  # 需要运行时确定
-        }
-    elif dataset_name in ["ucf101", "ucf101_video"]:
+    if dataset_name in ["ucf101", "ucf101_video"]:
         return {
             "name": "UCF-101 Video",
             "num_classes": 101,

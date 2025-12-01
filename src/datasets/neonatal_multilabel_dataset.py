@@ -48,7 +48,6 @@ class NeonatalMultilabelDataset(Dataset):
         labels_file (str): Excel标签文件路径
         split (str): 数据集分割 ('train', 'test')
         clip_len (int): 每个视频片段的帧数
-        model_type (str): 模型类型，用于获取对应的transforms
     """
     
     def __init__(self, frames_dir, labels_file, split='train', clip_len=16, model_type=None,
@@ -61,7 +60,7 @@ class NeonatalMultilabelDataset(Dataset):
             labels_file (str): Excel标签文件路径
             split (str): 数据集分割，'train'或'test'
             clip_len (int): 每个视频片段的帧数，默认16
-            model_type (str): 模型类型，用于获取对应的transforms
+            model_type (str): [已弃用] 保留用于向后兼容，不再使用
             top_n_classes (int, optional): 只使用样本数量前N多的类别，None表示使用全部类别
             stratified_split (bool): 是否使用分层抽样进行数据划分，默认True
             min_samples_per_class (int): 类别最小样本数阈值，默认10
@@ -85,9 +84,6 @@ class NeonatalMultilabelDataset(Dataset):
 
         # 参数验证
         self._validate_sampling_params()
-
-        # 获取模型特定的transforms
-        self.model_transforms = self._get_model_transforms()
 
         # 优化的预处理参数
         self.resize_height = 224
@@ -210,29 +206,6 @@ class NeonatalMultilabelDataset(Dataset):
 
         return sampled_buffer
 
-    def _get_model_transforms(self):
-        """获取模型特定的transforms（参考UCF101实现）"""
-        if self.model_type:
-            try:
-                from ..models.model_registry import get_video_model_transforms, validate_model_transforms_compatibility
-
-                # 获取transforms
-                transforms = get_video_model_transforms(self.model_type)
-                if transforms is None:
-                    return None
-
-                # 验证兼容性
-                is_compatible, message = validate_model_transforms_compatibility(self.model_type)
-                if not is_compatible:
-                    logger.warning(f"{self.model_type} transforms不兼容: {message}，回退到传统预处理")
-                    return None
-
-                return transforms
-
-            except ImportError:
-                # 如果导入失败，使用传统方式
-                pass
-        return None
     def _load_samples_optimized(self):
         """使用优化的标签处理器加载样本数据"""
         logger.info(f"使用优化缓存加载样本数据...")
@@ -480,11 +453,6 @@ class NeonatalMultilabelDataset(Dataset):
 
         return True
     
-    def set_model_type(self, model_type):
-        """设置模型类型并更新transforms（用于网格搜索）"""
-        self.model_type = model_type
-        self.model_transforms = self._get_model_transforms()
-    
     def __len__(self):
         return len(self.samples)
     
@@ -514,20 +482,11 @@ class NeonatalMultilabelDataset(Dataset):
         # 统一的帧采样
         buffer = self._sample_frames(buffer)
 
-        # 如果有模型特定的transforms，使用官方transforms
-        if self.model_transforms is not None:
-            # 转换为torch tensor格式: (T, H, W, C) -> (T, C, H, W)
-            buffer = torch.from_numpy(buffer).float() / 255.0
-            buffer = buffer.permute(0, 3, 1, 2)  # (T, H, W, C) -> (T, C, H, W)
-
-            # 应用模型特定的官方transforms (输入: T, C, H, W -> 输出: C, T, H, W)
-            buffer = self.model_transforms(buffer)
-        else:
-            # 使用传统的预处理方式（向后兼容）
-            buffer = self.crop(buffer, crop_size=self.crop_size, temporal_crop=False)
-            buffer = self.normalize(buffer)  # 对模型进行归一化处理
-            buffer = self.to_tensor(buffer)  # 对维度进行转化
-            buffer = torch.from_numpy(buffer)
+        # 视频预处理
+        buffer = self.crop(buffer, crop_size=self.crop_size, temporal_crop=False)
+        buffer = self.normalize(buffer)
+        buffer = self.to_tensor(buffer)
+        buffer = torch.from_numpy(buffer)
 
         # 获取多标签向量
         labels = torch.tensor(sample['labels'], dtype=torch.float32)
